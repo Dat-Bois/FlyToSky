@@ -6,11 +6,11 @@ title:  Team
 # {{ page.title }}
 
 
-## USER 1
-***UCI Net ID***: ucinetid1
+## EESH VIJ
+***UCI Net ID***: evij
 
-## USER 2
-***UCI Net ID***: ucinetid2
+## BRANDON SUN
+***UCI Net ID***: sunbt
 
-## USER 3
-***UCI Net ID***: ucinetid3
+## Wenxin Chen
+***UCI Net ID***: wenxinc2
