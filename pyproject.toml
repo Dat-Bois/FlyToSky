@@ -1,0 +1,15 @@
+[project]
+name = "FlyToSky"
+version = "0.1.0"
+description = "Quadcopter RL training for optimal trajectory tracking and online generation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pufferlib>=3.0.0",
+    "gymnasium>=0.29.0",
+    "torch>=2.0.0",
+    "numpy>=1.24.0",
+    "scipy",
+    "rerun-sdk==0.23.1",
+    "tqdm",
+]
