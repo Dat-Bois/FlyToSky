@@ -9,6 +9,8 @@ from typing import Optional, Tuple, Dict, Any
 import gymnasium
 import pufferlib
 
+from math_utils import *
+
 #TODO:
 '''
 Update goal logic for passing through waypoint
@@ -22,7 +24,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
     def __init__(
         self,
         num_envs: int = 1,
-        config_path: str = "my_quad_parameters.json",
+        config_path: str = "quad_params.json",
         max_episode_length: int = 1000,
         dt: float = 0.01,
         lin_vel_reward_scale: float = -0.05,
@@ -31,7 +33,6 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         orientation_reward_scale: float = 10.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        render_mode: Optional[str] = None,
         use_compile: bool = False,
         compile_mode: str = "reduce-overhead",
         **kwargs
@@ -55,11 +56,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.distance_to_goal_reward_scale = distance_to_goal_reward_scale
         self.orientation_reward_scale = orientation_reward_scale
         self.dynamics_randomization_delta = dynamics_randomization_delta
-        self.render_mode = render_mode
 
-        # Initialize rerun logging if rendering in human mode
-        if self.render_mode == "human" and HAS_RERUN:
-            rr.init("quadcopter_env", spawn=True)
+        #TODO: init rerun
 
         # Define action and observation spaces
         self.action_space = self.single_action_space
@@ -376,9 +374,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self._completed_episode_rewards[reset_envs] = self._cumulative_rewards[reset_envs]
             self._reset_idx(reset_envs)
 
-        # Render if human mode is enabled
-        if self.render_mode == "human" and HAS_RERUN:
-            self._render()
+        # log data
+        self._render()
 
         # Compute reward statistics across all environments
         info = {
@@ -502,9 +499,6 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
     def _render(self):
         """Render the environment using rerun logging."""
-        if not HAS_RERUN:
-            return
-
         # Log the first environment's state (index 0)
         position = self._position[0].detach().cpu().numpy()
         quaternion = self._quaternion[0].detach().cpu().numpy()

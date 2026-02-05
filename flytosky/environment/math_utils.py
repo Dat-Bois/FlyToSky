@@ -121,3 +121,13 @@ def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
     R[..., 2, 2] = 1 - 2 * (x**2 + y**2)
 
     return R
+
+__all__ = [
+    "quaternion_multiply",
+    "quaternion_conjugate",
+    "rotate_vector_by_quaternion",
+    "rotate_vector_by_quaternion_conj",
+    "quaternion_error_axis_angle",
+    "quaternion_from_z_rotation",
+    "quaternion_to_rotation_matrix",
+]
