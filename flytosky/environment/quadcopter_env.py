@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import gymnasium as gym
 import json
 import torch
 import numpy as np
-from typing import Optional, Tuple, Dict, Any
-
-import gymnasium
 import pufferlib
+import gymnasium as gym
+
+from typing import Optional, Tuple, Dict, Any
 
 from math_utils import *
 
@@ -16,8 +15,6 @@ from math_utils import *
 Update goal logic for passing through waypoint
 Add logic for sequenced waypoints
 Expand observation space to include next N waypoints
-Add corridor constraints
-import math funcs
 '''
 
 class QuadcopterEnv(pufferlib.PufferEnv):
@@ -500,59 +497,60 @@ class QuadcopterEnv(pufferlib.PufferEnv):
     def _render(self):
         """Render the environment using rerun logging."""
         # Log the first environment's state (index 0)
-        position = self._position[0].detach().cpu().numpy()
-        quaternion = self._quaternion[0].detach().cpu().numpy()
-        quat_xyzw = np.array([quaternion[1], quaternion[2],
-                              quaternion[3], quaternion[0]])
+        pass
+        # position = self._position[0].detach().cpu().numpy()
+        # quaternion = self._quaternion[0].detach().cpu().numpy()
+        # quat_xyzw = np.array([quaternion[1], quaternion[2],
+        #                       quaternion[3], quaternion[0]])
 
-        for i, action_val in enumerate(self._actions[0].cpu().numpy()):
-            rr.log(f"actions/motor_{i}", rr.Scalars(float(action_val)))
+        # for i, action_val in enumerate(self._actions[0].cpu().numpy()):
+        #     rr.log(f"actions/motor_{i}", rr.Scalars(float(action_val)))
 
-        for i, observation_val in enumerate(self.observations[0].cpu().numpy()):
-            rr.log(f"observations/{i}", rr.Scalars(float(observation_val)))
+        # for i, observation_val in enumerate(self.observations[0].cpu().numpy()):
+        #     rr.log(f"observations/{i}", rr.Scalars(float(observation_val)))
 
-        log_drone_pose(position, quat_xyzw)
+        # log_drone_pose(position, quat_xyzw)
 
-        # Log angular velocity in degrees/s as time series
-        angular_vel_rad = self._angular_velocity[0].detach().cpu().numpy()
-        angular_vel_deg = np.degrees(angular_vel_rad)
-        rr.log("angular_velocity_deg_s/roll", rr.Scalars(float(angular_vel_deg[0])))
-        rr.log("angular_velocity_deg_s/pitch", rr.Scalars(float(angular_vel_deg[1])))
-        rr.log("angular_velocity_deg_s/yaw", rr.Scalars(float(angular_vel_deg[2])))
+        # # Log angular velocity in degrees/s as time series
+        # angular_vel_rad = self._angular_velocity[0].detach().cpu().numpy()
+        # angular_vel_deg = np.degrees(angular_vel_rad)
+        # rr.log("angular_velocity_deg_s/roll", rr.Scalars(float(angular_vel_deg[0])))
+        # rr.log("angular_velocity_deg_s/pitch", rr.Scalars(float(angular_vel_deg[1])))
+        # rr.log("angular_velocity_deg_s/yaw", rr.Scalars(float(angular_vel_deg[2])))
 
-        # Log RPMs as time series
-        rpms = self._rotor_speeds[0].detach().cpu().numpy()
-        rr.log("rotor_speeds_rpm/motor_0", rr.Scalars(float(rpms[0])))
-        rr.log("rotor_speeds_rpm/motor_1", rr.Scalars(float(rpms[1])))
-        rr.log("rotor_speeds_rpm/motor_2", rr.Scalars(float(rpms[2])))
-        rr.log("rotor_speeds_rpm/motor_3", rr.Scalars(float(rpms[3])))
+        # # Log RPMs as time series
+        # rpms = self._rotor_speeds[0].detach().cpu().numpy()
+        # rr.log("rotor_speeds_rpm/motor_0", rr.Scalars(float(rpms[0])))
+        # rr.log("rotor_speeds_rpm/motor_1", rr.Scalars(float(rpms[1])))
+        # rr.log("rotor_speeds_rpm/motor_2", rr.Scalars(float(rpms[2])))
+        # rr.log("rotor_speeds_rpm/motor_3", rr.Scalars(float(rpms[3])))
 
-        # Log total thrust in body frame as time series
-        total_thrust = self._total_thrust_body[0].detach().cpu().numpy()
-        rr.log("total_thrust_body_N/x", rr.Scalars(float(total_thrust[0])))
-        rr.log("total_thrust_body_N/y", rr.Scalars(float(total_thrust[1])))
-        rr.log("total_thrust_body_N/z", rr.Scalars(float(total_thrust[2])))
+        # # Log total thrust in body frame as time series
+        # total_thrust = self._total_thrust_body[0].detach().cpu().numpy()
+        # rr.log("total_thrust_body_N/x", rr.Scalars(float(total_thrust[0])))
+        # rr.log("total_thrust_body_N/y", rr.Scalars(float(total_thrust[1])))
+        # rr.log("total_thrust_body_N/z", rr.Scalars(float(total_thrust[2])))
 
-        # Log velocity in world frame as time series
-        velocity_world = self._velocity[0].detach().cpu().numpy()
-        rr.log("velocity_world_m_s/x", rr.Scalars(float(velocity_world[0])))
-        rr.log("velocity_world_m_s/y", rr.Scalars(float(velocity_world[1])))
-        rr.log("velocity_world_m_s/z", rr.Scalars(float(velocity_world[2])))
+        # # Log velocity in world frame as time series
+        # velocity_world = self._velocity[0].detach().cpu().numpy()
+        # rr.log("velocity_world_m_s/x", rr.Scalars(float(velocity_world[0])))
+        # rr.log("velocity_world_m_s/y", rr.Scalars(float(velocity_world[1])))
+        # rr.log("velocity_world_m_s/z", rr.Scalars(float(velocity_world[2])))
 
-        # Log goal position with goal orientation
-        goal_position = self._desired_pos_w[0].detach().cpu().numpy()
-        goal_quaternion = self._desired_quat_w[0].detach().cpu().numpy()
-        goal_quat_xyzw = np.array([goal_quaternion[1], goal_quaternion[2],
-                                   goal_quaternion[3], goal_quaternion[0]])
-        rr.log(
-            "goal",
-            rr.Transform3D(
-                translation=goal_position,
-                quaternion=goal_quat_xyzw,
-            ),
-            rr.TransformAxes3D(0.5),
-            static=False,
-        )
+        # # Log goal position with goal orientation
+        # goal_position = self._desired_pos_w[0].detach().cpu().numpy()
+        # goal_quaternion = self._desired_quat_w[0].detach().cpu().numpy()
+        # goal_quat_xyzw = np.array([goal_quaternion[1], goal_quaternion[2],
+        #                            goal_quaternion[3], goal_quaternion[0]])
+        # rr.log(
+        #     "goal",
+        #     rr.Transform3D(
+        #         translation=goal_position,
+        #         quaternion=goal_quat_xyzw,
+        #     ),
+        #     rr.TransformAxes3D(0.5),
+        #     static=False,
+        # )
 
     def close(self):
         pass
