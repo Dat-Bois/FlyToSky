@@ -576,14 +576,36 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._wp_positions[env_ids] = waypoints
         self._wp_normals[env_ids] = normals
 
-        #TODO: Start in front of random wp, and point towards it
-        self._target_wp_idx[env_ids] = 0
-
-        # Reset quadcopter state to origin with identity orientation
-        self._position[env_ids] = torch.tensor([0.0, 0.0, 1.0], device=self.device)
-        self._velocity[env_ids] = 0.0
-        self._quaternion[env_ids] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
+        # Randomized gate start and velocity (always points towards target)
+        start_wp_idx = torch.randint(0, self.track_settings.num_points, (len(env_ids),), device=self.device)
+        self._target_wp_idx[env_ids] = start_wp_idx
+        target_pos = waypoints[torch.arange(len(env_ids)), start_wp_idx]
+        origin_pos = torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(len(env_ids), -1)        
+        prev_idx = torch.clamp(start_wp_idx - 1, min=0)
+        prev_gate_pos = waypoints[torch.arange(len(env_ids)), prev_idx]
+        #init spawn
+        is_start = (start_wp_idx == 0)
+        spawn_pos = torch.where(is_start.unsqueeze(-1), origin_pos, prev_gate_pos)
+        spawn_noise = torch.randn_like(spawn_pos) * 0.5
+        self._position[env_ids] = spawn_pos + spawn_noise
+        # point yaw
+        aim_vec = target_pos - self._position[env_ids]
+        aim_yaw = torch.atan2(aim_vec[:, 1], aim_vec[:, 0])
+        half_yaw = aim_yaw * 0.5
+        cy = torch.cos(half_yaw)
+        sy = torch.sin(half_yaw)
+        self._quaternion[env_ids, 0] = cy
+        self._quaternion[env_ids, 1] = 0.0
+        self._quaternion[env_ids, 2] = 0.0
+        self._quaternion[env_ids, 3] = sy
+        # random speed between 5 m/s and 15 m/s (use curriculum?) #TODO
+        initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(5.0, 15.0)
+        # masking speed: If gate 0, speed = 0. Else, speed = random.
+        initial_speed = torch.where(is_start.unsqueeze(-1), torch.zeros_like(initial_speed), initial_speed)
+        aim_dir = torch.nn.functional.normalize(aim_vec, dim=1)
+        self._velocity[env_ids] = aim_dir * initial_speed
         self._angular_velocity[env_ids] = 0.0
+        self._last_actions_0_1[env_ids] = 0.0
 
     def close(self):
         pass
