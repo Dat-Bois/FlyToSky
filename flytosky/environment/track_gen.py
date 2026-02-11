@@ -1,5 +1,7 @@
+import torch
 import numpy as np
 from dataclasses import dataclass
+from typing import Tuple
 
 '''
 Generate tracks (a set of waypoints in meters) with setable levels of difficulty.
@@ -12,71 +14,112 @@ Level 4: random-walk track (adjustable distance between points, number of points
 Level 5: random-walk track with variable height (adjustable distance between points, number of points, height range)
 '''
 
+
 @dataclass
 class TrackSettings:
-    num_points: int = 10 # number of waypoints
-    length: float = 10.0  # for straight tracks
-    height_range: tuple = (1, 5)  # for variable height tracks
-    radius: float = 5.0  # for circular tracks
-    direction: str = 'clockwise'  # for circular tracks
-    step_size: float = 3.0  # for random walk tracks
+    """
+    Settings for track generation. 
+    """
+    num_points: int = 10        # Number of waypoints
+    length: float = 20.0        # Total length for straight tracks
+    height_range: tuple = (1.0, 2.5) # Min/Max height
+    radius: float = 5.0         # Radius for circular tracks
+    step_size: float = 4.0      # Distance between gates (Random Walk)
 
-@dataclass
-class Track:
-    level: int
-    settings: TrackSettings  # settings used to generate the track
-    waypoints: np.ndarray  # shape (N, 3) for N waypoints in 3D space
+class VectorizedTrackGenerator:
+    def __init__(self, device: torch.device):
+        self.device = device
 
-class TrackGenerator:
-    def __init__(self):
-        pass
-
-    def generate_track(self, level: int, settings: TrackSettings) -> Track:
+    def generate_track(self, 
+                       level: int, 
+                       settings: TrackSettings, 
+                       env_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generates tracks for a batch of environments.
+        
+        Args:
+            level: Curriculum level (0-5)
+            settings: TrackSettings object
+            env_ids: Tensor of environment indices that need reset
+            
+        Returns:
+            waypoints: Tensor [Num_Reset, Num_Points, 3]
+            normals: Tensor [Num_Reset, Num_Points, 3] (Direction to next gate)
+        """
         if level == 0:
-            return self._generate_straight_line_track(settings)
+            return self._generate_straight(settings, env_ids, variable_height=False)
         elif level == 1:
-            return self._generate_variable_height_straight_track(settings)
+            return self._generate_straight(settings, env_ids, variable_height=True)
         elif level == 2:
-            return self._generate_circular_track(settings)
+            return self._generate_circle(settings, env_ids, variable_height=False)
         elif level == 3:
-            return self._generate_variable_height_circular_track(settings)
+            return self._generate_circle(settings, env_ids, variable_height=True)
         elif level == 4:
-            return self._generate_random_walk_track(settings)
+            return self._generate_random_walk(settings, env_ids, variable_height=False)
         elif level == 5:
-            return self._generate_variable_height_random_walk_track(settings)
+            return self._generate_random_walk(settings, env_ids, variable_height=True)
         else:
             raise ValueError(f"Invalid track level: {level}")
 
-    def _generate_straight_line_track(self, settings: TrackSettings) -> Track:
-        waypoints = np.array([[i, 0, 2] for i in np.linspace(0, settings.length, num=settings.num_points)])
-        return Track(level=0, settings=settings, waypoints=waypoints)
+    def _compute_normals(self, waypoints: torch.Tensor) -> torch.Tensor:
+        """Calculates direction vector (normal) for each gate plane."""
+        #vector from Gate i -> Gate i+1
+        diffs = waypoints[:, 1:] - waypoints[:, :-1]
+        normals = torch.nn.functional.normalize(diffs, dim=-1)
+        #pad the last gate with the previous normal (since there is no i+1)
+        last_normal = normals[:, -1:].clone()
+        return torch.cat([normals, last_normal], dim=1)
 
-    def _generate_variable_height_straight_track(self, settings: TrackSettings) -> Track:
-        waypoints = np.array([[i, 0, np.random.uniform(*settings.height_range)] for i in np.linspace(0, settings.length, num=settings.num_points)])
-        return Track(level=1, settings=settings, waypoints=waypoints)
+    def _generate_straight(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
+        num_reset = len(env_ids)
+        waypoints = torch.zeros(num_reset, settings.num_gates, 3, device=self.device)    
+        x = torch.linspace(0, settings.length, settings.num_points, device=self.device)
+        waypoints[:, :, 0] = x.unsqueeze(0).expand(num_reset, -1)
+        waypoints[:, :, 1] = 0.0
+        if variable_height:
+            waypoints[:, :, 2] = torch.empty(num_reset, settings.num_points, device=self.device).uniform_(*settings.height_range)
+        else:
+            waypoints[:, :, 2] = 1.5 # Fixed height
+        return waypoints, self._compute_normals(waypoints)
 
-    def _generate_circular_track(self, settings: TrackSettings) -> Track:
-        angle_step = np.pi / 50 if settings.direction == 'clockwise' else -np.pi / 50
-        waypoints = np.array([[settings.radius * np.cos(i * angle_step), settings.radius * np.sin(i * angle_step), 0] for i in range(settings.num_points)])
-        return Track(level=2, settings=settings, waypoints=waypoints)
+    def _generate_circle(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
+        num_reset = len(env_ids)
+        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
+        angles = torch.linspace(0, 2 * np.pi, settings.num_points, device=self.device)
+        angles = angles.unsqueeze(0).expand(num_reset, -1)
+        direction = torch.randint(0, 2, (num_reset, 1), device=self.device).float() * 2 - 1
+        angles = angles * direction
+        waypoints[:, :, 0] = settings.radius * torch.cos(angles)
+        waypoints[:, :, 1] = settings.radius * torch.sin(angles)
+        if variable_height:
+            waypoints[:, :, 2] = torch.empty(num_reset, settings.num_points, device=self.device).uniform_(*settings.height_range)
+        else:
+            waypoints[:, :, 2] = 1.5
+        return waypoints, self._compute_normals(waypoints)
 
-    def _generate_variable_height_circular_track(self, settings: TrackSettings) -> Track:
-        angle_step = np.pi / 50 if settings.direction == 'clockwise' else -np.pi / 50
-        waypoints = np.array([[settings.radius * np.cos(i * angle_step), settings.radius * np.sin(i * angle_step), np.random.uniform(*settings.height_range)] for i in range(settings.num_points)])
-        return Track(level=3, settings=settings, waypoints=waypoints)
-    
-    def _generate_random_walk_track(self, settings: TrackSettings) -> Track:
-        waypoints = np.zeros((settings.num_points, 3))
-        step_size = settings.step_size * np.random.uniform(0.5, 1.5)  # add some variability to step size
+    def _generate_random_walk(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
+        num_reset = len(env_ids)
+        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
+        start_z = 1.5
+        current_pos = torch.zeros(num_reset, 3, device=self.device)
+        current_pos[:, 2] = start_z
+        waypoints[:, 0] = current_pos
         for i in range(1, settings.num_points):
-            settings.direction = np.random.uniform(0, 2 * np.pi)
-            waypoints[i] = waypoints[i-1] + step_size * np.array([np.cos(settings.direction), np.sin(settings.direction), 0])
-        return Track(level=4, settings=settings, waypoints=waypoints)
-    
-    def _generate_variable_height_random_walk_track(self, settings: TrackSettings) -> Track:
-        waypoints = np.zeros((settings.num_points, 3))
-        step_size = settings.step_size * np.random.uniform(0.5, 1.5)  # add some variability to step size
-        for i in range(1, settings.num_points):
-            settings.direction = np.random.uniform(0, 2 * np.pi)
-            waypoints[i] = waypoints[i-1] + step_size * np.array([np.cos(settings.direction), np.sin(settings.direction), np.random.uniform(*settings.height_range)])
-        return Track(level=5, settings=settings, waypoints=waypoints)
+            if variable_height:
+                #3D Noise
+                offset = torch.randn(num_reset, 3, device=self.device)
+                offset = torch.nn.functional.normalize(offset, dim=1) * settings.step_size
+                new_z = current_pos[:, 2] + offset[:, 2]
+                new_z = torch.clamp(new_z, settings.height_range[0], settings.height_range[1])
+                offset[:, 2] = new_z - current_pos[:, 2] # Re-adjust offset to match clamped Z
+            else:
+                # 2D Noise (XY only)
+                angle = torch.rand(num_reset, device=self.device) * 2 * np.pi
+                dx = torch.cos(angle) * settings.step_size
+                dy = torch.sin(angle) * settings.step_size
+                offset = torch.stack([dx, dy, torch.zeros(num_reset, device=self.device)], dim=1)
+            # Here we just add the offset
+            current_pos = current_pos + offset
+            waypoints[:, i] = current_pos
+
+        return waypoints, self._compute_normals(waypoints)
