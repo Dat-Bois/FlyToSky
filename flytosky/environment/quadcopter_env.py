@@ -13,12 +13,15 @@ from .track_gen import VectorizedTrackGenerator, TrackSettings
 
 #TODO:
 '''
+Done:
 Update goal logic for passing through waypoint (plane passed normal)
 Add logic for sequenced waypoints
-Expand observation space to include next N waypoints
-Randomized start positions infront of waypoints.
 Action smoothing (low-pass filter) 
 Delta progress reward
+
+Not Done:
+Expand observation space to include next N waypoints
+Randomized start positions infront of waypoints.
 '''
 
 class QuadcopterEnv(pufferlib.PufferEnv):
@@ -42,9 +45,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
     ):
         self.single_action_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(4,), dtype=np.float32) # should be (-1, 1) but in isaaclab it's inf so we're sticking with that
         # Observations: velocity_body (3) + angular_velocity (3) + gravity_body (3) +
-        #               rel_pos_body (3) + orientation_error_axis_angle (3) + rpm_scaled (4) = 19
+        #               orientation_error_axis_angle (3) + rpm_scaled (4) + future_wp (3*lookahead(3) = 9) = 25
         self.single_observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(19,), dtype=np.float32
+            low=-np.inf, high=np.inf, shape=(25,), dtype=np.float32
         )
         self.num_envs = num_envs
         self.num_agents = num_envs  # For PufferLib compatibility
@@ -74,6 +77,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._wp_positions = torch.zeros(self.num_envs, self.track_settings.num_points, 3, device=self.device)
         self._wp_normals = torch.zeros(self.num_envs, self.track_settings.num_points, 3, device=self.device)
         self._target_wp_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
+        # target orientation (handled internally, always facing towards next waypoint)
+        self._desired_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
 
         #TODO: init rerun
 
@@ -275,7 +281,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         dist_to_center = torch.linalg.norm(vec_new, dim=1)
         # We crossed if we went from negative (behind) to positive (ahead)
         # AND we are within a reasonable distance (e.g. 1m radius) to count it.
-        within_radius = dist_to_center < 0.5
+        within_radius = dist_to_center < 1
         crossed_plane = (dist_plane_old < 0) & (dist_plane_new >= 0)
         wp_passed = crossed_plane & within_radius
         new_target_idx = target_wp_idx + wp_passed.long()
@@ -293,18 +299,26 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # Compute observations
         velocity_body = rotate_vector_by_quaternion_conj(new_velocity, new_quaternion)
         gravity_body = rotate_vector_by_quaternion_conj(gravity_unit.unsqueeze(0).expand(new_position.shape[0], -1), new_quaternion)
-        rel_pos_world = desired_pos_w - new_position
-        rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, new_quaternion)
         rpm_scaled = new_rotor_speeds / max_rpm
         orientation_error = quaternion_error_axis_angle(new_quaternion, desired_quat_w)
+
+        future_rel_wp = []
+        lookahead = 3
+        batch_idx = torch.arange(wp_positions.shape[0], device=wp_positions.device)
+        for i in range(lookahead):
+            idx = torch.clamp(target_wp_idx + i, max=wp_positions.shape[1]-1)
+            wp_pos = wp_positions[batch_idx, idx]
+            rel_pos_world = wp_pos - position
+            rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, quaternion)
+            future_rel_wp.append(rel_pos_body)
 
         observations = torch.cat([
             velocity_body,           # 3
             new_angular_velocity,    # 3
             gravity_body,            # 3
-            rel_pos_body,            # 3
             orientation_error,       # 3
-            rpm_scaled               # 4
+            rpm_scaled,              # 4
+            *future_rel_wp           # 3 * lookahead(3) = 9
         ], dim=-1)
 
         # rewards
@@ -364,6 +378,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             rewards,
             reward_components,
             died,
+            new_target_idx,
+            desired_quat_w
         )
 
     def _step_once(self, actions_0_1: torch.Tensor):
@@ -379,6 +395,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self.rewards,
             reward_components,
             self.terminals,
+            self._target_wp_idx,
+            self._desired_quat_w
         ) = self._compiled_physics_step( # this is _physics_step_impl wrapped by torch.compile
             actions_0_1,
             self._last_actions_0_1,
@@ -467,32 +485,32 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
     def _get_observations(self) -> torch.Tensor:
         """Compute observations for all environments."""
-        # Get rotation matrix
-        # R = quaternion_to_rotation_matrix(self._quaternion)
-
-        # Transform velocity to body frame
-
+        # velocity in body frame
         velocity_body = rotate_vector_by_quaternion_conj(self._velocity, self._quaternion)
-
-        # Project gravity to body frame
+        # gravity in body frame
         gravity_body = rotate_vector_by_quaternion_conj(self._gravity_unit.unsqueeze(0).expand(self.num_envs, -1), self._quaternion)
-
-        # Transform desired position to body frame (relative position)
-        rel_pos_world = self._desired_pos_w - self._position
-        rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, self._quaternion)
-
+        # scaled rpm
         rpm_scaled = self._rotor_speeds / self._max_rpm
-
-        # Compute orientation error as axis-angle (in body frame)
+        # orientation error as axis-angle (in body frame) #TODO bring out desired quat somehow
         orientation_error = quaternion_error_axis_angle(self._quaternion, self._desired_quat_w)
 
+        future_rel_wp = []
+        lookahead = 3
+        batch_idx = torch.arange(self.num_envs, device=self.device) 
+        for i in range(lookahead):
+            idx = torch.clamp(self._target_wp_idx + i, max=self._wp_positions.shape[1]-1)
+            wp_pos = self._wp_positions[batch_idx, idx]
+            rel_pos_world = wp_pos - self._position
+            rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, self._quaternion)
+            future_rel_wp.append(rel_pos_body)
+        
         obs = torch.cat([
             velocity_body,           # 3
             self._angular_velocity,  # 3
             gravity_body,            # 3
-            rel_pos_body,            # 3
             orientation_error,       # 3
-            rpm_scaled               # 4
+            rpm_scaled,               # 4
+            *future_rel_wp             # 3 * lookahead
         ], dim=-1)
 
         assert not torch.isnan(obs).any()

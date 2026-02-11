@@ -10,10 +10,19 @@ Level 0: Straight line track (adjustable length)
 Level 1: Straight track with variable height (adjustable length and height range)
 Level 2: circular track (adjustable radius, direction)
 Level 3: circular track with variable height (adjustable radius, height, direction)
+
+Are these actually better?
 Level 4: random-walk track (adjustable distance between points, number of points)
 Level 5: random-walk track with variable height (adjustable distance between points, number of points, height range)
 '''
 
+#TODO:
+'''
+Rather than only generate new difficult tracks, do a distribution
+So Level 0: 100% straight
+Level 1: 50% straight, 50% straight with variable height
+Level 2: 50% circular, 25% circular with variable height, 25% straight with variable height etc
+'''
 
 @dataclass
 class TrackSettings:
