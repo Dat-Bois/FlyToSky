@@ -16,7 +16,6 @@ Level 4: random-walk track (adjustable distance between points, number of points
 Level 5: random-walk track with variable height (adjustable distance between points, number of points, height range)
 '''
 
-#TODO:
 '''
 Rather than only generate new difficult tracks, do a distribution
 Level 0: 100% straight

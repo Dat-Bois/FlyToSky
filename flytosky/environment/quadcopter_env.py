@@ -12,15 +12,12 @@ from typing import Optional, Tuple, Dict, Any
 from .math_utils import *
 from .track_gen import VectorizedTrackGenerator, TrackSettings
 
-#TODO:
 '''
 Done:
 Update goal logic for passing through waypoint (plane passed normal)
 Add logic for sequenced waypoints
 Action smoothing (low-pass filter) 
 Delta progress reward
-
-Not Done:
 Expand observation space to include next N waypoints
 Randomized start positions infront of waypoints.
 '''
@@ -489,7 +486,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         gravity_body = rotate_vector_by_quaternion_conj(self._gravity_unit.unsqueeze(0).expand(self.num_envs, -1), self._quaternion)
         # scaled rpm
         rpm_scaled = self._rotor_speeds / self._max_rpm
-        # orientation error as axis-angle (in body frame) #TODO bring out desired quat somehow
+        # orientation error as axis-angle (in body frame)
         orientation_error = quaternion_error_axis_angle(self._quaternion, self._desired_quat_w)
 
         future_rel_wp = []
