@@ -5,10 +5,11 @@ import torch
 import numpy as np
 import pufferlib
 import gymnasium as gym
+from pathlib import Path
 
 from typing import Optional, Tuple, Dict, Any
 
-from math_utils import *
+from .math_utils import *
 from .track_gen import VectorizedTrackGenerator, TrackSettings
 
 #TODO:
@@ -35,7 +36,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         wp_passed_reward_scale: float = 5.0,
         action_smoothness_reward_scale: float = -0.7,
         ang_vel_reward_scale: float = -0.01,
-        orientation_reward_scale: float = 10.0,
+        orientation_reward_scale: float = 100.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -88,7 +89,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.observation_space = self.single_observation_space
 
         # Load quadcopter parameters
-        params = json.load(open(config_path))
+        config_file = Path(__file__).parent / config_path
+        with open(config_file) as f:
+            params = json.load(f)
 
         # Quadcopter state
         self._position = torch.zeros(self.num_envs, 3, device=self.device)  # world frame
@@ -116,13 +119,13 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in ["lin_vel", "ang_vel", "distance_to_goal", "orientation"]
+            for key in ["progress", "wp_passed", "action_smoothness", "ang_vel", "orientation"]
         }
         self._cumulative_rewards = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
         # Completed episode statistics (stores most recent completed episode for each env)
-        self._completed_episode_lengths = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        self._completed_episode_rewards = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self._completed_episode_lengths = torch.full((self.num_envs,), float('nan'), dtype=torch.float, device=self.device)
+        self._completed_episode_rewards = torch.full((self.num_envs,), float('nan'), dtype=torch.float, device=self.device)
 
         # Store nominal (original) dynamics parameters
         self._nominal_thrust_coefficients = torch.tensor(params['thrust_coefficients'], device=self.device, dtype=torch.float32)
@@ -170,11 +173,52 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # Process actions and apply physics
         self._actions = actions.clone().clamp(-1.0, 1.0)
         actions_0_1 = self._max_rpm * (self._actions + 1.0) / 2.0
-        for _ in range(self._decimation_steps-1):
-            self._step_once(actions_0_1)
-        results = self._step_once(actions_0_1)
+
+        # Accumulate rewards and reward components across decimation sub-steps.
+        # Only the final sub-step's observations, terminals, etc. are kept.
+        total_rewards = torch.zeros(self.num_envs, device=self.device)
+        total_reward_components = torch.zeros(self.num_envs, 5, device=self.device)
+
+        for _ in range(self._decimation_steps):
+            self._physics_substep(actions_0_1)
+            total_rewards += self.rewards
+            total_reward_components += self._last_reward_components
+
         self._last_actions_0_1 = actions_0_1.clone()
-        return results
+
+        self.rewards = total_rewards
+        rewards_dict = {
+            "progress": total_reward_components[:, 0],
+            "wp_passed": total_reward_components[:, 1],
+            "action_smoothness": total_reward_components[:, 2],
+            "ang_vel": total_reward_components[:, 3],
+            "orientation": total_reward_components[:, 4],
+        }
+        for key, value in rewards_dict.items():
+            self._episode_sums[key] += value
+        self._cumulative_rewards += self.rewards
+        self.truncations = self.episode_length_buf >= self.max_episode_length - 1
+        self.episode_length_buf += 1
+        reset_envs = torch.where(self.terminals | self.truncations)[0]
+        if len(reset_envs) > 0:
+            # Store completed episode stats before resetting
+            self._completed_episode_lengths[reset_envs] = self.episode_length_buf[reset_envs].float()
+            self._completed_episode_rewards[reset_envs] = self._cumulative_rewards[reset_envs]
+            self._reset_idx(reset_envs)
+        info = {
+            "mean_reward": self.rewards.mean().item(),
+        }
+        for key, value in rewards_dict.items():
+            info[f"mean_{key}"] = value.mean().item()
+        info["episode_length_min"] = torch.nanmin(self._completed_episode_lengths).item()
+        info["episode_length_max"] = torch.nanmax(self._completed_episode_lengths).item()
+        info["episode_length_mean"] = torch.nanmean(self._completed_episode_lengths).item()
+        info["episode_reward_min"] = torch.nanmin(self._completed_episode_rewards).item()
+        info["episode_reward_max"] = torch.nanmax(self._completed_episode_rewards).item()
+        info["episode_reward_mean"] = torch.nanmean(self._completed_episode_rewards).item()
+        self.infos = [info]
+        return (self.observations, self.rewards, self.terminals,
+            self.truncations, self.infos)
     
     def _physics_step_impl(
         self,
@@ -278,10 +322,12 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         dist_plane_old = torch.sum(vec_old * current_normal, dim=1)
         vec_new = new_position - current_wp
         dist_plane_new = torch.sum(vec_new * current_normal, dim=1)
-        dist_to_center = torch.linalg.norm(vec_new, dim=1)
+        # Perpendicular distance to gate center (in the plane of the gate)
+        perp_offset = vec_new - dist_plane_new.unsqueeze(-1) * current_normal
+        dist_to_center_perp = torch.linalg.norm(perp_offset, dim=1)
         # We crossed if we went from negative (behind) to positive (ahead)
-        # AND we are within a reasonable distance (e.g. 1m radius) to count it.
-        within_radius = dist_to_center < 1
+        # AND we are within a reasonable perpendicular distance to count it.
+        within_radius = dist_to_center_perp < 1.5
         crossed_plane = (dist_plane_old < 0) & (dist_plane_new >= 0)
         wp_passed = crossed_plane & within_radius
         new_target_idx = target_wp_idx + wp_passed.long()
@@ -306,10 +352,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         lookahead = 3
         batch_idx = torch.arange(wp_positions.shape[0], device=wp_positions.device)
         for i in range(lookahead):
-            idx = torch.clamp(target_wp_idx + i, max=wp_positions.shape[1]-1)
+            idx = torch.clamp(new_target_idx + i, max=wp_positions.shape[1]-1)
             wp_pos = wp_positions[batch_idx, idx]
-            rel_pos_world = wp_pos - position
-            rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, quaternion)
+            rel_pos_world = wp_pos - new_position
+            rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, new_quaternion)
             future_rel_wp.append(rel_pos_body)
 
         observations = torch.cat([
@@ -324,8 +370,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # rewards
 
         # Delta progress reward (encourage moving towards goal)
-        dist_old = torch.linalg.norm(position - current_wp, dim=1)
-        dist_new = torch.linalg.norm(new_position - current_wp, dim=1)
+        # Use desired_pos_w (the target *after* any gate advance) so there is no
+        # reward discontinuity when the target switches to the next waypoint.
+        dist_old = torch.linalg.norm(position - desired_pos_w, dim=1)
+        dist_new = torch.linalg.norm(new_position - desired_pos_w, dim=1)
         delta_progress = dist_old - dist_new
         #scaled since it's a small number (meters per 0.01s)
         r_progress = delta_progress * progress_reward_scale
@@ -365,7 +413,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # Check for termination
         dist_to_target = torch.linalg.norm(desired_pos_w - new_position, dim=1)
         lost = dist_to_target > 8.0
-        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost
+        track_completed = (target_wp_idx + wp_passed.long()) >= (wp_positions.shape[1])
+        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed
 
         return (
             new_rotor_speeds,
@@ -382,7 +431,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             desired_quat_w
         )
 
-    def _step_once(self, actions_0_1: torch.Tensor):
+    def _physics_substep(self, actions_0_1: torch.Tensor):
+        """Run a single physics sub-step. Updates state in-place.
+        Stores observations, rewards, terminals, and reward components
+        but does NOT do episode bookkeeping or resets."""
         # Call compiled physics kernel
         (
             self._rotor_speeds,
@@ -393,7 +445,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self._total_thrust_body,
             self.observations,
             self.rewards,
-            reward_components,
+            self._last_reward_components,
             self.terminals,
             self._target_wp_idx,
             self._desired_quat_w
@@ -428,60 +480,6 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self.ang_vel_reward_scale,
             self.orientation_reward_scale,
         )
-
-        # Build rewards dict for logging (outside compiled region)
-        rewards_dict = {
-            "progress": reward_components[:, 0],
-            "wp_passed": reward_components[:, 1],
-            "action_smoothness": reward_components[:, 2],
-            "ang_vel": reward_components[:, 3],
-            "orientation": reward_components[:, 4],
-        }
-
-        # Update episode sums for logging
-        for key, value in rewards_dict.items():
-            self._episode_sums[key] += value
-
-        # Accumulate rewards for episode tracking
-        self._cumulative_rewards += self.rewards
-
-        # Check for truncation (timeout) - terminals already computed in kernel
-        self.truncations = self.episode_length_buf >= self.max_episode_length - 1
-
-        # Update episode length
-        self.episode_length_buf += 1
-
-        # Handle resets
-        reset_envs = torch.where(self.terminals | self.truncations)[0]
-        if len(reset_envs) > 0:
-            # Store completed episode stats before resetting
-            self._completed_episode_lengths[reset_envs] = self.episode_length_buf[reset_envs].float()
-            self._completed_episode_rewards[reset_envs] = self._cumulative_rewards[reset_envs]
-            self._reset_idx(reset_envs)
-
-        # log data
-        # self._render()
-
-        # Compute reward statistics across all environments
-        info = {
-            "mean_reward": self.rewards.mean().item(),
-        }
-
-        # Add mean for each reward component
-        for key, value in rewards_dict.items():
-            info[f"mean_{key}"] = value.mean().item()
-
-        # Add episode statistics (min/max/mean across most recent completed episode per env)
-        info["episode_length_min"] = self._completed_episode_lengths.min().item()
-        info["episode_length_max"] = self._completed_episode_lengths.max().item()
-        info["episode_length_mean"] = self._completed_episode_lengths.mean().item()
-        info["episode_reward_min"] = self._completed_episode_rewards.min().item()
-        info["episode_reward_max"] = self._completed_episode_rewards.max().item()
-        info["episode_reward_mean"] = self._completed_episode_rewards.mean().item()
-
-        self.infos = [info]
-        return (self.observations, self.rewards, self.terminals,
-            self.truncations, self.infos)
 
     def _get_observations(self) -> torch.Tensor:
         """Compute observations for all environments."""
@@ -576,18 +574,21 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._wp_positions[env_ids] = waypoints
         self._wp_normals[env_ids] = normals
 
-        # Randomized gate start and velocity (always points towards target)
-        start_wp_idx = torch.randint(0, self.track_settings.num_points, (len(env_ids),), device=self.device)
+        # Randomized wp start and velocity (always points towards target)
+        start_wp_idx = torch.randint(0, max(1, self.track_settings.num_points - 1), (len(env_ids),), device=self.device)
         self._target_wp_idx[env_ids] = start_wp_idx
         target_pos = waypoints[torch.arange(len(env_ids)), start_wp_idx]
         origin_pos = torch.tensor([0.0, 0.0, 1.0], device=self.device).expand(len(env_ids), -1)        
         prev_idx = torch.clamp(start_wp_idx - 1, min=0)
-        prev_gate_pos = waypoints[torch.arange(len(env_ids)), prev_idx]
+        prev_wp_pos = waypoints[torch.arange(len(env_ids)), prev_idx]
         #init spawn
         is_start = (start_wp_idx == 0)
-        spawn_pos = torch.where(is_start.unsqueeze(-1), origin_pos, prev_gate_pos)
+        spawn_pos = torch.where(is_start.unsqueeze(-1), origin_pos, prev_wp_pos)
         spawn_noise = torch.randn_like(spawn_pos) * 0.5
-        self._position[env_ids] = spawn_pos + spawn_noise
+        spawn_pos_noisy = spawn_pos + spawn_noise
+        # Clamp z so the drone doesn't spawn underground or too high
+        spawn_pos_noisy[:, 2] = torch.clamp(spawn_pos_noisy[:, 2], min=0.3, max=4.5)
+        self._position[env_ids] = spawn_pos_noisy
         # point yaw
         aim_vec = target_pos - self._position[env_ids]
         aim_yaw = torch.atan2(aim_vec[:, 1], aim_vec[:, 0])
@@ -600,7 +601,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._quaternion[env_ids, 3] = sy
         # random speed between 5 m/s and 15 m/s (use curriculum?) #TODO
         initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(5.0, 15.0)
-        # masking speed: If gate 0, speed = 0. Else, speed = random.
+        # masking speed: If wp 0, speed = 0. Else, speed = random.
         initial_speed = torch.where(is_start.unsqueeze(-1), torch.zeros_like(initial_speed), initial_speed)
         aim_dir = torch.nn.functional.normalize(aim_vec, dim=1)
         self._velocity[env_ids] = aim_dir * initial_speed

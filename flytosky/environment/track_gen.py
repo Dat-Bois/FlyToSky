@@ -19,9 +19,11 @@ Level 5: random-walk track with variable height (adjustable distance between poi
 #TODO:
 '''
 Rather than only generate new difficult tracks, do a distribution
-So Level 0: 100% straight
+Level 0: 100% straight
 Level 1: 50% straight, 50% straight with variable height
-Level 2: 50% circular, 25% circular with variable height, 25% straight with variable height etc
+Level 2: 50% circular, 25% circular with variable height, 25% straight with variable height
+Level 3: 35% circular with variable height, 25% circular, 20% straight with variable height, 20% straight
+Level 4 and Level 5 TBD
 '''
 
 @dataclass
@@ -39,6 +41,52 @@ class VectorizedTrackGenerator:
     def __init__(self, device: torch.device):
         self.device = device
 
+        # Distribution tables: maps (generator_fn, variable_height) -> weight
+        # Level 0: 100% straight
+        # Level 1: 50% straight, 50% straight with variable height
+        # Level 2: 50% circular, 25% circular with variable height, 25% straight with variable height
+        # Level 3: 35% circular with variable height, 25% circular, 20% straight with variable height, 20% straight
+        # Level 4+: TBD (random walk mixes)
+        self.LEVEL_DISTRIBUTIONS = {
+            0: [
+                ("straight", False, 1.0),
+            ],
+            1: [
+                ("straight", False, 0.50),
+                ("straight", True,  0.50),
+            ],
+            2: [
+                ("circle",   False, 0.50),
+                ("circle",   True,  0.25),
+                ("straight", True,  0.25),
+            ],
+            3: [
+                ("circle",   True,  0.35),
+                ("circle",   False, 0.25),
+                ("straight", True,  0.20),
+                ("straight", False, 0.20),
+            ],
+            4: [
+                ("random_walk", False, 0.40),
+                ("circle",      True,  0.30),
+                ("circle",      False, 0.15),
+                ("straight",    True,  0.15),
+            ],
+            5: [
+                ("random_walk", True,  0.40),
+                ("random_walk", False, 0.20),
+                ("circle",      True,  0.20),
+                ("circle",      False, 0.10),
+                ("straight",    True,  0.10),
+            ],
+        }
+
+        self._GENERATORS = {
+            "straight":    "_generate_straight",
+            "circle":      "_generate_circle",
+            "random_walk": "_generate_random_walk",
+        }
+
     def generate_track(self, 
                        level: int, 
                        settings: TrackSettings, 
@@ -55,20 +103,31 @@ class VectorizedTrackGenerator:
             waypoints: Tensor [Num_Reset, Num_Points, 3]
             normals: Tensor [Num_Reset, Num_Points, 3] (Direction to next gate)
         """
-        if level == 0:
-            return self._generate_straight(settings, env_ids, variable_height=False)
-        elif level == 1:
-            return self._generate_straight(settings, env_ids, variable_height=True)
-        elif level == 2:
-            return self._generate_circle(settings, env_ids, variable_height=False)
-        elif level == 3:
-            return self._generate_circle(settings, env_ids, variable_height=True)
-        elif level == 4:
-            return self._generate_random_walk(settings, env_ids, variable_height=False)
-        elif level == 5:
-            return self._generate_random_walk(settings, env_ids, variable_height=True)
-        else:
-            raise ValueError(f"Invalid track level: {level}")
+        num_reset = len(env_ids)
+        clamped_level = min(level, max(self.LEVEL_DISTRIBUTIONS.keys()))
+        distribution = self.LEVEL_DISTRIBUTIONS[clamped_level]
+
+        # Determine how many envs get each track type
+        track_types, var_heights, weights = zip(*distribution)
+        weights_t = torch.tensor(weights, device=self.device)
+        # Assign each env to a track type via multinomial sampling
+        assignments = torch.multinomial(weights_t.expand(num_reset, -1), 1).reshape(-1)  # (num_reset,)
+
+        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
+        normals = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
+
+        for group_idx, (track_type, var_height, _) in enumerate(distribution):
+            mask = assignments == group_idx
+            if not mask.any():
+                continue
+            group_ids = env_ids[mask]
+            gen_fn = getattr(self, self._GENERATORS[track_type])
+            wp, nm = gen_fn(settings, group_ids, variable_height=var_height)
+            waypoints[mask] = wp
+            normals[mask] = nm
+
+        return waypoints, normals
+
 
     def _compute_normals(self, waypoints: torch.Tensor) -> torch.Tensor:
         """Calculates direction vector (normal) for each gate plane."""
@@ -81,7 +140,7 @@ class VectorizedTrackGenerator:
 
     def _generate_straight(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
         num_reset = len(env_ids)
-        waypoints = torch.zeros(num_reset, settings.num_gates, 3, device=self.device)    
+        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)    
         x = torch.linspace(0, settings.length, settings.num_points, device=self.device)
         waypoints[:, :, 0] = x.unsqueeze(0).expand(num_reset, -1)
         waypoints[:, :, 1] = 0.0
@@ -94,7 +153,7 @@ class VectorizedTrackGenerator:
     def _generate_circle(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
         num_reset = len(env_ids)
         waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
-        angles = torch.linspace(0, 2 * np.pi, settings.num_points, device=self.device)
+        angles = torch.linspace(0, 2 * np.pi, settings.num_points + 1, device=self.device)[:-1]
         angles = angles.unsqueeze(0).expand(num_reset, -1)
         direction = torch.randint(0, 2, (num_reset, 1), device=self.device).float() * 2 - 1
         angles = angles * direction
