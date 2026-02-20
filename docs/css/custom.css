@@ -1,39 +1,423 @@
-/* Sticky footer styles
--------------------------------------------------- */
+/* ==========================================================
+   FlyToSky — Aviation-chart inspired theme
+   ========================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&display=swap');
+
+:root {
+  --deep-navy: #0a1628;
+  --mid-navy: #111d32;
+  --panel: #152238;
+  --panel-edge: #1e2f4a;
+  --sky-blue: #4a90d9;
+  --sky-light: #6aabef;
+  --amber: #d4a574;
+  --amber-dim: #b08a5e;
+  --text-primary: #dfe4ed;
+  --text-secondary: #8899aa;
+  --text-faint: #556677;
+}
+
+/* ---- Reset & base ---- */
 html {
   position: relative;
   min-height: 100%;
 }
+
 body {
-  /* Margin bottom by footer height */
-  margin-bottom: 60px;
+  margin: 0;
+  padding: 0;
+  margin-bottom: 72px;
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  background: var(--deep-navy);
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Subtle topo grid — CSS only, no images */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(180deg, transparent 0%, rgba(74,144,217,0.03) 50%, transparent 100%),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 59px,
+      rgba(74,144,217,0.04) 59px,
+      rgba(74,144,217,0.04) 60px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 59px,
+      rgba(74,144,217,0.04) 59px,
+      rgba(74,144,217,0.04) 60px
+    );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ---- Navbar ---- */
+.navbar-inverse {
+  background: var(--mid-navy) !important;
+  border: none !important;
+  border-bottom: 1px solid var(--panel-edge) !important;
+  box-shadow: 0 1px 12px rgba(0,0,0,0.35);
+  min-height: 52px;
+}
+
+.navbar-inverse .navbar-brand {
+  font-family: 'Instrument Serif', serif;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  color: var(--amber) !important;
+}
+
+.navbar-inverse .navbar-nav > li > a {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary) !important;
+  transition: color 0.2s;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.navbar-inverse .navbar-nav > li > a:hover,
+.navbar-inverse .navbar-nav > li > a:focus {
+  color: var(--text-primary) !important;
+}
+
+.navbar-inverse .navbar-nav > .active > a,
+.navbar-inverse .navbar-nav > .active > a:hover,
+.navbar-inverse .navbar-nav > .active > a:focus {
+  background: transparent !important;
+  color: var(--amber) !important;
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.navbar-inverse .navbar-toggle {
+  border-color: var(--panel-edge);
+}
+.navbar-inverse .navbar-toggle .icon-bar {
+  background-color: var(--text-secondary);
+}
+
+/* ---- Main container ---- */
+body > .container {
+  padding: 74px 15px 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* Remove default bootstrap page-header */
+.page-header {
+  border-bottom: 1px solid var(--panel-edge);
+  margin-top: 10px;
+  margin-bottom: 30px;
+  padding-bottom: 14px;
+}
+
+.page-header h2 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  font-size: 30px;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.page-header h2 small {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  display: block;
+  margin-top: 4px;
+}
+
+/* ---- Typography inside content ---- */
+h1, h2, h3, h4 {
+  font-family: 'Instrument Serif', serif;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+h2 { font-size: 26px; }
+h3 { font-size: 20px; color: var(--amber); }
+
+p, li {
+  color: var(--text-primary);
+}
+
+a {
+  color: var(--sky-blue);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+a:hover, a:focus {
+  color: var(--sky-light);
+  text-decoration: none;
+}
+
+strong { color: var(--text-primary); font-weight: 600; }
+
+code {
+  font-size: 80%;
+  background: var(--panel);
+  color: var(--amber);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+/* ---- Home: Hero section ---- */
+.hero-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  margin-bottom: 48px;
+}
+
+.hero-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hero-text .tagline {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber-dim);
+  margin-bottom: 10px;
+}
+
+.hero-text h1 {
+  font-family: 'Instrument Serif', serif;
+  font-size: 42px;
+  line-height: 1.15;
+  color: var(--text-primary);
+  margin: 0 0 18px 0;
+}
+
+.hero-text h1 em {
+  font-style: italic;
+  color: var(--sky-blue);
+}
+
+.hero-text .summary {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  max-width: 540px;
+}
+
+.hero-image {
+  flex: 0 0 340px;
+  max-width: 340px;
+}
+
+.hero-image img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+}
+
+.hero-image .img-caption {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+  margin-top: 8px;
+}
+
+/* ---- Reports grid ---- */
+.reports-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 52px;
+}
+
+.report-link {
+  display: inline-block;
+  padding: 10px 22px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  transition: border-color 0.2s, color 0.2s, box-shadow 0.2s;
+}
+
+.report-link:hover {
+  border-color: var(--sky-blue);
+  color: var(--sky-light);
+  box-shadow: 0 2px 12px rgba(74,144,217,0.12);
+  text-decoration: none;
+}
+
+/* ---- Source link ---- */
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-faint);
+  margin-bottom: 36px;
+  letter-spacing: 0.02em;
+}
+
+.source-link svg {
+  width: 16px;
+  height: 16px;
+  fill: var(--text-faint);
+  transition: fill 0.2s;
+}
+
+.source-link:hover {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.source-link:hover svg {
+  fill: var(--text-secondary);
+}
+
+/* ---- Section divider ---- */
+.section-rule {
+  border: none;
+  border-top: 1px solid var(--panel-edge);
+  margin: 0 0 40px 0;
+}
+
+.section-label {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 20px;
+}
+
+/* ---- Team grid ---- */
+.team-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 48px;
+}
+
+.team-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 24px 20px;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+.team-card:hover {
+  border-color: rgba(74,144,217,0.3);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+
+.team-card .name {
+  font-family: 'Instrument Serif', serif;
+  font-size: 19px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.team-card .netid {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.team-card .linkedin-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sky-blue);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.team-card .linkedin-link:hover {
+  color: var(--sky-light);
+  text-decoration: none;
+}
+
+/* ---- Footer ---- */
 .footer {
   position: absolute;
   bottom: 0;
   width: 100%;
-  /* Set the fixed height of the footer here */
-  height: 60px;
-  background-color: #f5f5f5;
+  height: auto;
+  min-height: 56px;
+  padding: 16px 0;
+  background: var(--mid-navy);
+  border-top: 1px solid var(--panel-edge);
 }
 
-
-/* Custom page CSS
--------------------------------------------------- */
-/* Not required for template or sticky footer method. */
-
-body > .container {
-  padding: 60px 15px 0;
-}
-.container .text-muted {
-  margin: 20px 0;
+.footer .text-muted {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-faint);
 }
 
-.footer > .container {
-  padding-right: 15px;
-  padding-left: 15px;
+.footer .text-muted a {
+  color: var(--text-secondary);
 }
 
-code {
-  font-size: 80%;
+/* ---- Content pages (proposal, status, etc.) ---- */
+.container p,
+.container li {
+  line-height: 1.75;
+}
+
+.container ul, .container ol {
+  padding-left: 20px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 768px) {
+  .hero-intro {
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .hero-image {
+    flex: none;
+    max-width: 100%;
+  }
+
+  .hero-text h1 {
+    font-size: 32px;
+  }
+
+  .team-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .reports-bar {
+    flex-wrap: wrap;
+  }
 }
