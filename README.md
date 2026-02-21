@@ -1,6 +1,8 @@
 # FlyToSky
 175 Project Repo for Quad RL
 
+Project Website: https://dat-bois.github.io/FlyToSky
+
 ## To install:
 ```pip3 install -e .```
 
