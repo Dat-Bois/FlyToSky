@@ -11,6 +11,7 @@ from typing import Optional, Tuple, Dict, Any
 
 from .math_utils import *
 from .track_gen import VectorizedTrackGenerator, TrackSettings
+from ..logging import Log
 
 '''
 Done:
@@ -51,6 +52,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.num_agents = num_envs  # For PufferLib compatibility
         super().__init__()
 
+        Log.info(f"Initializing QuadcopterEnv with {num_envs} envs on {device}")
+
         self.device = torch.device(device)
         self.dt = dt
         self.max_episode_length = max_episode_length
@@ -79,7 +82,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # target orientation (handled internally, always facing towards next waypoint)
         self._desired_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
 
-        #TODO: init rerun
+        # init logging
+        Log.init("quadcopter_env")
 
         # Define action and observation spaces
         self.action_space = self.single_action_space
@@ -87,6 +91,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # Load quadcopter parameters
         config_file = Path(__file__).parent / config_path
+        Log.info(f"Loading quadcopter params from {config_file}")
         with open(config_file) as f:
             params = json.load(f)
 
@@ -149,6 +154,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             # Use 'default' mode instead of 'reduce-overhead' to avoid CUDA graph issues
             # with tensor reuse across multiple step() calls
             effective_mode = compile_mode if compile_mode != "reduce-overhead" else "default"
+            Log.info(f"Compiling physics step with torch.compile (mode={effective_mode})")
             self._compiled_physics_step = torch.compile(
                 self._physics_step_impl,
                 mode=effective_mode,
@@ -156,6 +162,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             )
         else:
             self._compiled_physics_step = self._physics_step_impl
+
+        Log.info(f"QuadcopterEnv initialized: dt={dt}, max_ep_len={max_episode_length}, "
+                 f"track_points={num_track_points}, dynamics_rand={dynamics_randomization_delta}")
 
     def step(self, actions: torch.Tensor) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """Execute one step in the environment."""
@@ -201,7 +210,24 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             # Store completed episode stats before resetting
             self._completed_episode_lengths[reset_envs] = self.episode_length_buf[reset_envs].float()
             self._completed_episode_rewards[reset_envs] = self._cumulative_rewards[reset_envs]
+            avg_len = self.episode_length_buf[reset_envs].float().mean().item()
+            avg_rew = self._cumulative_rewards[reset_envs].mean().item()
+            Log.info(f"Resetting {len(reset_envs)} envs | avg ep length: {avg_len:.0f} | avg ep reward: {avg_rew:.2f}")
             self._reset_idx(reset_envs)
+
+        Log.render(
+            position=self._position[0].detach().cpu().numpy(),
+            quaternion_wxyz=self._quaternion[0].detach().cpu().numpy(),
+            actions=self._actions[0].detach().cpu().numpy(),
+            observations=self.observations[0].detach().cpu().numpy(),
+            angular_velocity_rad=self._angular_velocity[0].detach().cpu().numpy(),
+            rotor_speeds=self._rotor_speeds[0].detach().cpu().numpy(),
+            total_thrust_body=self._total_thrust_body[0].detach().cpu().numpy(),
+            velocity_world=self._velocity[0].detach().cpu().numpy(),
+            goal_position=self._wp_positions[0, self._target_wp_idx[0]].detach().cpu().numpy(),
+            goal_quaternion_wxyz=self._desired_quat_w[0].detach().cpu().numpy(),
+        )
+
         info = {
             "mean_reward": self.rewards.mean().item(),
         }
@@ -515,6 +541,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[torch.Tensor, Dict]:
         """Reset all environments."""
+        Log.info(f"Full reset called on all {self.num_envs} envs (seed={seed})")
         if seed is not None:
             torch.manual_seed(seed)
             np.random.seed(seed)
@@ -531,6 +558,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         if len(env_ids) == 0:
             return
 
+        Log.debug(f"_reset_idx: resetting {len(env_ids)} envs")
+
         # Reset episode tracking
         self.episode_length_buf[env_ids] = 0
         self._actions[env_ids] = 0.0
@@ -546,6 +575,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         num_reset = len(env_ids)
 
         if delta > 0:
+            Log.debug(f"Applying dynamics randomization (delta={delta:.3f}) to {num_reset} envs")
             # Generate random multipliers: (1 +- delta)
             self._thrust_coefficients[env_ids] = self._nominal_thrust_coefficients * (
                 1.0 + torch.zeros((num_reset, *self._nominal_thrust_coefficients.shape), device=self.device).uniform_(-delta, delta)
@@ -606,62 +636,4 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._last_actions_0_1[env_ids] = 0.0
 
     def close(self):
-        pass
-
-    # def _render(self):
-    #     """Render the environment using rerun logging."""
-        # Log the first environment's state (index 0)
-        # pass
-        # position = self._position[0].detach().cpu().numpy()
-        # quaternion = self._quaternion[0].detach().cpu().numpy()
-        # quat_xyzw = np.array([quaternion[1], quaternion[2],
-        #                       quaternion[3], quaternion[0]])
-
-        # for i, action_val in enumerate(self._actions[0].cpu().numpy()):
-        #     rr.log(f"actions/motor_{i}", rr.Scalars(float(action_val)))
-
-        # for i, observation_val in enumerate(self.observations[0].cpu().numpy()):
-        #     rr.log(f"observations/{i}", rr.Scalars(float(observation_val)))
-
-        # log_drone_pose(position, quat_xyzw)
-
-        # # Log angular velocity in degrees/s as time series
-        # angular_vel_rad = self._angular_velocity[0].detach().cpu().numpy()
-        # angular_vel_deg = np.degrees(angular_vel_rad)
-        # rr.log("angular_velocity_deg_s/roll", rr.Scalars(float(angular_vel_deg[0])))
-        # rr.log("angular_velocity_deg_s/pitch", rr.Scalars(float(angular_vel_deg[1])))
-        # rr.log("angular_velocity_deg_s/yaw", rr.Scalars(float(angular_vel_deg[2])))
-
-        # # Log RPMs as time series
-        # rpms = self._rotor_speeds[0].detach().cpu().numpy()
-        # rr.log("rotor_speeds_rpm/motor_0", rr.Scalars(float(rpms[0])))
-        # rr.log("rotor_speeds_rpm/motor_1", rr.Scalars(float(rpms[1])))
-        # rr.log("rotor_speeds_rpm/motor_2", rr.Scalars(float(rpms[2])))
-        # rr.log("rotor_speeds_rpm/motor_3", rr.Scalars(float(rpms[3])))
-
-        # # Log total thrust in body frame as time series
-        # total_thrust = self._total_thrust_body[0].detach().cpu().numpy()
-        # rr.log("total_thrust_body_N/x", rr.Scalars(float(total_thrust[0])))
-        # rr.log("total_thrust_body_N/y", rr.Scalars(float(total_thrust[1])))
-        # rr.log("total_thrust_body_N/z", rr.Scalars(float(total_thrust[2])))
-
-        # # Log velocity in world frame as time series
-        # velocity_world = self._velocity[0].detach().cpu().numpy()
-        # rr.log("velocity_world_m_s/x", rr.Scalars(float(velocity_world[0])))
-        # rr.log("velocity_world_m_s/y", rr.Scalars(float(velocity_world[1])))
-        # rr.log("velocity_world_m_s/z", rr.Scalars(float(velocity_world[2])))
-
-        # # Log goal position with goal orientation
-        # goal_position = self._desired_pos_w[0].detach().cpu().numpy()
-        # goal_quaternion = self._desired_quat_w[0].detach().cpu().numpy()
-        # goal_quat_xyzw = np.array([goal_quaternion[1], goal_quaternion[2],
-        #                            goal_quaternion[3], goal_quaternion[0]])
-        # rr.log(
-        #     "goal",
-        #     rr.Transform3D(
-        #         translation=goal_position,
-        #         quaternion=goal_quat_xyzw,
-        #     ),
-        #     rr.TransformAxes3D(0.5),
-        #     static=False,
-        # )
+        Log.info("QuadcopterEnv closed.")
