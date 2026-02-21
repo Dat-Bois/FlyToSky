@@ -178,8 +178,8 @@ class Log:
             rr.Transform3D(
                 translation=position,
                 quaternion=(Rotation.from_quat(quaternion)).as_quat(),
+                axis_length=0.1,
             ),
-            rr.TransformAxes3D(0.1),
             static=False,
         )
 
@@ -245,9 +245,32 @@ class Log:
             rr.Transform3D(
                 translation=goal_position,
                 quaternion=goal_quat_xyzw,
+                axis_length=0.5,
             ),
-            rr.TransformAxes3D(0.5),
             static=False,
+        )
+
+    @staticmethod
+    def log_waypoints(wp_positions: np.ndarray, target_wp_idx: int) -> None:
+        """Log the full waypoint track and highlight the current target.
+
+        Args:
+            wp_positions: (N, 3) array of all waypoint positions.
+            target_wp_idx: Index of the current target waypoint.
+        """
+        # Full track in red
+        rr.log(
+            "local/track",
+            rr.LineStrips3D([wp_positions], colors=[[255, 0, 0]]),
+        )
+        rr.log(
+            "local/track/waypoints",
+            rr.Points3D(wp_positions, colors=[[255, 0, 0]] * len(wp_positions), radii=0.08),
+        )
+        # Current target waypoint in blue
+        rr.log(
+            "local/track/current_goal",
+            rr.Points3D([wp_positions[target_wp_idx]], colors=[[0, 120, 255]], radii=0.15),
         )
 
     @staticmethod
@@ -260,8 +283,9 @@ class Log:
         rotor_speeds: np.ndarray,
         total_thrust_body: np.ndarray,
         velocity_world: np.ndarray,
-        goal_position: np.ndarray,
         goal_quaternion_wxyz: np.ndarray,
+        wp_positions: np.ndarray,
+        target_wp_idx: int,
     ) -> None:
         """Render the environment state using rerun logging.
 
@@ -290,4 +314,5 @@ class Log:
         Log.log_rotor_speeds(rotor_speeds)
         Log.log_thrust(total_thrust_body)
         Log.log_world_velocity(velocity_world)
-        Log.log_goal(goal_position, goal_quat_xyzw)
+        Log.log_goal(wp_positions[target_wp_idx], goal_quat_xyzw)
+        Log.log_waypoints(wp_positions, target_wp_idx)

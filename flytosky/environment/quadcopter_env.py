@@ -224,8 +224,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             rotor_speeds=self._rotor_speeds[0].detach().cpu().numpy(),
             total_thrust_body=self._total_thrust_body[0].detach().cpu().numpy(),
             velocity_world=self._velocity[0].detach().cpu().numpy(),
-            goal_position=self._wp_positions[0, self._target_wp_idx[0]].detach().cpu().numpy(),
             goal_quaternion_wxyz=self._desired_quat_w[0].detach().cpu().numpy(),
+            wp_positions=self._wp_positions[0].detach().cpu().numpy(),
+            target_wp_idx=self._target_wp_idx[0].item(),
         )
 
         info = {
