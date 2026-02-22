@@ -32,8 +32,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         dt: float = 0.01,
         progress_reward_scale: float = 100.0,
         wp_passed_reward_scale: float = 5.0,
-        action_smoothness_reward_scale: float = -0.7,
-        ang_vel_reward_scale: float = -0.01,
+        action_smoothness_reward_scale: float = -5,
+        ang_vel_reward_scale: float = -5,
         orientation_reward_scale: float = 100.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -82,6 +82,16 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # target orientation (handled internally, always facing towards next waypoint)
         self._desired_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
+
+        # intital speed map by curriculum level
+        self._speed_map = {
+            "0": (0.0, 0.0), # level 0: stationary start
+            "1": (0.0, 3.0), # level 1: random speed between 0 m/s and 3 m/s
+            "2": (0.0, 3.0), # level 2: random speed between 0 m/s and 3 m/s
+            "3": (2.0, 5.0), # level 3: random speed between 2 m/s and 5 m/s
+            "4": (5.0, 10.0), # level 4: random speed between 5 m/s and 10 m/s
+            "5": (5.0, 10.0), # level 5: random speed between 5 m/s and 10 m/s
+        }
 
         # Define action and observation spaces
         self.action_space = self.single_action_space
@@ -393,11 +403,11 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - new_position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, new_quaternion)
-            future_rel_wp.append(rel_pos_body)
+            future_rel_wp.append(rel_pos_body * (0.2**i))  # scale down for stability
 
         observations = torch.cat([
-            velocity_body,           # 3
-            new_angular_velocity,    # 3
+            velocity_body * 0.1,           # 3
+            new_angular_velocity * 0.1,    # 3
             gravity_body,            # 3
             orientation_error,       # 3
             rpm_scaled,              # 4
@@ -411,7 +421,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # reward discontinuity when the target switches to the next waypoint.
         dist_old = torch.linalg.norm(position - desired_pos_w, dim=1)
         dist_new = torch.linalg.norm(new_position - desired_pos_w, dim=1)
-        delta_progress = dist_old - dist_new
+        delta_progress = torch.clamp(dist_old - dist_new, min=-0.5, max=0.2) # cap reward 
         #scaled since it's a small number (meters per 0.01s)
         r_progress = delta_progress * progress_reward_scale
         #pulse reward
@@ -423,8 +433,13 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         action_diff = torch.norm(actions_0_1 - last_actions_0_1, dim=1)
         r_smooth = action_smoothness_reward_scale * action_diff * dt
         # velocity penalty (encourage smooth flight)
-        ang_vel = torch.sum(torch.square(new_angular_velocity), dim=1)
-        r_ang_vel = ang_vel * ang_vel_reward_scale * dt
+        wx = new_angular_velocity[:, 0] # Roll rate
+        wy = new_angular_velocity[:, 1] # Pitch rate
+        wz = new_angular_velocity[:, 2] # Yaw rate
+        xy_spin_penalty = (torch.square(wx) + torch.square(wy)) 
+        z_spin_penalty = torch.square(wz)
+        ang_vel = xy_spin_penalty + z_spin_penalty
+        r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.2 * dt)
         # orientation penalty (encourage facing towards goal)
         orientation_error_magnitude = torch.linalg.norm(orientation_error, dim=1)
         orientation_reward_mapped = 1 - torch.tanh(orientation_error_magnitude / 0.5)
@@ -537,11 +552,11 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = self._wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - self._position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, self._quaternion)
-            future_rel_wp.append(rel_pos_body)
+            future_rel_wp.append(rel_pos_body * (0.2**i))
         
         obs = torch.cat([
-            velocity_body,           # 3
-            self._angular_velocity,  # 3
+            velocity_body * 0.1,           # 3
+            self._angular_velocity * 0.1,  # 3
             gravity_body,            # 3
             orientation_error,       # 3
             rpm_scaled,               # 4
@@ -645,8 +660,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._desired_quat_w[env_ids, 1] = 0.0
         self._desired_quat_w[env_ids, 2] = 0.0
         self._desired_quat_w[env_ids, 3] = sy
-        # random speed between 5 m/s and 15 m/s (use curriculum?) #TODO
-        initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(5.0, 15.0)
+        # random speed between 5 m/s and 15 m/s
+        initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(*self._speed_map[str(self.curriculum_level)])
         # masking speed: If wp 0, speed = 0. Else, speed = random.
         initial_speed = torch.where(is_start.unsqueeze(-1), torch.zeros_like(initial_speed), initial_speed)
         aim_dir = torch.nn.functional.normalize(aim_vec, dim=1)

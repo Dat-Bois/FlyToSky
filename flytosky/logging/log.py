@@ -236,8 +236,18 @@ class Log:
     @staticmethod
     def log_observations(observations: np.ndarray) -> None:
         """Log observation vector as time series."""
+        observations_names = [
+            "velocity_body_x", "velocity_body_y", "velocity_body_z",
+            "angular_velocity_body_x", "angular_velocity_body_y", "angular_velocity_body_z",
+            "gravity_body_x", "gravity_body_y", "gravity_body_z",
+            "orientation_error_x", "orientation_error_y", "orientation_error_z",
+            "rpm_1", "rpm_2", "rpm_3", "rpm_4",
+            "wp1_rel_x", "wp1_rel_y", "wp1_rel_z",
+            "wp2_rel_x", "wp2_rel_y", "wp2_rel_z",
+            "wp3_rel_x", "wp3_rel_y", "wp3_rel_z",
+        ]
         for i, obs_val in enumerate(observations):
-            rr.log(f"observations/{i}", rr.Scalars(float(obs_val)))
+            rr.log(f"observations/{observations_names[i]}", rr.Scalars(float(obs_val)))
 
     @staticmethod
     def log_angular_velocity(angular_velocity_rad: np.ndarray) -> None:
