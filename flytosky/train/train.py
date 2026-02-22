@@ -14,6 +14,8 @@ import torch.optim as optim
 from torch.distributions import Normal
 
 from flytosky.logging import Log
+from flytosky.environment.quadcopter_env import QuadcopterEnv
+
 
 # Maximum curriculum level supported by VectorizedTrackGenerator
 MAX_CURRICULUM_LEVEL = 5
@@ -38,7 +40,7 @@ def layer_init(layer: nn.Linear, std: float = math.sqrt(2), bias_const: float = 
 class ActorCritic(nn.Module):
     """Shared-encoder actor-critic with diagonal Gaussian policy."""
 
-    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 128):
+    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 64):
         super().__init__()
         self.encoder = nn.Sequential(
             layer_init(nn.Linear(obs_dim, hidden)),
@@ -183,9 +185,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-
-    Log.init("quadcopter_env")
-
+    Log.init()
     # Device selection
     if args.device:
         device = torch.device(args.device)
@@ -212,9 +212,6 @@ def main() -> None:
         patience=args.curriculum_patience,
         max_dynamics_delta=args.max_dynamics_delta,
     )
-
-    # Create environment
-    from flytosky.environment.quadcopter_env import QuadcopterEnv
 
     env = QuadcopterEnv(
         num_envs=args.num_envs,

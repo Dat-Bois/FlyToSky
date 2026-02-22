@@ -6,8 +6,9 @@ from typing import Tuple
 from pathlib import Path
 from scipy.spatial.transform import Rotation
 
+import sys
 import rerun as rr
-import rerun.blueprints as rrb
+import rerun.blueprint as rrb
 
 file_path = Path(__file__).parent
 logged_model_names = {}
@@ -75,7 +76,7 @@ class Log:
         """
         frame = inspect.stack()[2]
         name = Path(frame.filename).stem  # e.g. "train", "quadcopter_env"
-
+        print(f"Resolving logger for caller: {name}")
         if name not in Log._loggers:
             Log._loggers[name] = Log._create_console_logger(name, Log._output_path)
         return Log._loggers[name]
@@ -150,8 +151,6 @@ class Log:
         )
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
-        logger.setLevel(-1)
-
         return logger
 
     @staticmethod
@@ -205,8 +204,6 @@ class Log:
                     aspect_ratio=1.7777778,
                     camera_xyz=rr.ViewCoordinates.FLU,
                     image_plane_distance=0.1,
-                    color=[255, 128, 0],
-                    line_width=0.003,
                 ),
             )
             logged_model_names[model_name] = True

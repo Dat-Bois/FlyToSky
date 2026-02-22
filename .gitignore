@@ -1,3 +1,9 @@
+# random stuff
+flytosky/train/checkpoints
+*resources
+flytosky/logging/Logs
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import torch
 import numpy as np
-import pufferlib
 import gymnasium as gym
+import pufferlib # needs to be imported after gym or else logging breaks???
 from pathlib import Path
 
 from typing import Optional, Tuple, Dict, Any
@@ -50,9 +50,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         )
         self.num_envs = num_envs
         self.num_agents = num_envs  # For PufferLib compatibility
-        super().__init__()
-
+        
         Log.info(f"Initializing QuadcopterEnv with {num_envs} envs on {device}")
+        
+        super().__init__()
 
         self.device = torch.device(device)
         self.dt = dt
@@ -235,12 +236,23 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         }
         for key, value in rewards_dict.items():
             info[f"mean_{key}"] = value.mean().item()
-        info["episode_length_min"] = torch.nanmin(self._completed_episode_lengths).item()
-        info["episode_length_max"] = torch.nanmax(self._completed_episode_lengths).item()
-        info["episode_length_mean"] = torch.nanmean(self._completed_episode_lengths).item()
-        info["episode_reward_min"] = torch.nanmin(self._completed_episode_rewards).item()
-        info["episode_reward_max"] = torch.nanmax(self._completed_episode_rewards).item()
-        info["episode_reward_mean"] = torch.nanmean(self._completed_episode_rewards).item()
+        valid_mask = ~torch.isnan(self._completed_episode_lengths)
+        if valid_mask.any():
+            valid_lengths = self._completed_episode_lengths[valid_mask]
+            valid_rewards = self._completed_episode_rewards[valid_mask]
+            info["episode_length_min"] = valid_lengths.min().item()
+            info["episode_length_max"] = valid_lengths.max().item()
+            info["episode_length_mean"] = valid_lengths.mean().item()
+            info["episode_reward_min"] = valid_rewards.min().item()
+            info["episode_reward_max"] = valid_rewards.max().item()
+            info["episode_reward_mean"] = valid_rewards.mean().item()
+        else:
+            info["episode_length_min"] = 0.0
+            info["episode_length_max"] = 0.0
+            info["episode_length_mean"] = 0.0
+            info["episode_reward_min"] = 0.0
+            info["episode_reward_max"] = 0.0
+            info["episode_reward_mean"] = 0.0
         self.infos = [info]
         return (self.observations, self.rewards, self.terminals,
             self.truncations, self.infos)
