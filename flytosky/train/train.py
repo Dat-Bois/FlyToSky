@@ -426,6 +426,9 @@ def main() -> None:
             vf=f"{v_loss.item():.3f}",
         )
 
+        if not math.isnan(rolling_mean_reward):
+            Log.log_episode_reward_mean(rolling_mean_reward)
+
         Log.debug(
             f"update {update:4d} | step {global_step:10d} | SPS {sps:6d} | "
             f"ep_rew {rolling_mean_reward:8.2f} | ep_len {rolling_mean_length:6.1f} | "

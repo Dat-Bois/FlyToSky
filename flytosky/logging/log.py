@@ -92,6 +92,7 @@ class Log:
         rotor_speeds_plot = rrb.TimeSeriesView(name="Rotor Speeds (RPM)", origin="rotor_speeds_rpm")
         thrust_plot = rrb.TimeSeriesView(name="Thrust (N)", origin="total_thrust_body_N")
         velocity_plot = rrb.TimeSeriesView(name="Velocity (m/s)", origin="velocity_world_m_s")
+        episode_reward_plot = rrb.TimeSeriesView(name="Episode Reward Mean", origin="episode_reward_mean")
 
         blueprint = rrb.Blueprint(
             rrb.Horizontal(
@@ -104,6 +105,7 @@ class Log:
                     rrb.Horizontal(actions_plot, rotor_speeds_plot),
                     rrb.Horizontal(angular_vel_plot, velocity_plot),
                     rrb.Horizontal(thrust_plot, observations_plot),
+                    episode_reward_plot,
                 ),
                 column_shares=[1, 1],
             ),
@@ -276,6 +278,12 @@ class Log:
         rr.log("velocity_world_m_s/x", rr.Scalars(float(velocity[0])))
         rr.log("velocity_world_m_s/y", rr.Scalars(float(velocity[1])))
         rr.log("velocity_world_m_s/z", rr.Scalars(float(velocity[2])))
+
+    @staticmethod
+    def log_episode_reward_mean(reward_mean: float) -> None:
+        """Log rolling mean episode reward as a time series."""
+        rr.set_time("unix_time", timestamp=time.time())
+        rr.log("episode_reward_mean/reward", rr.Scalars(reward_mean))
 
     @staticmethod
     def log_goal(goal_position: np.ndarray, goal_quat_xyzw: np.ndarray) -> None:
