@@ -119,7 +119,7 @@ class Log:
         # Drone model setup
         rr.log("local/drone", rr.Asset3D(path=file_path / "drone.obj"), static=True)
         rr.log(
-            f"{"local/drone"}/camera",
+            "local/drone/camera",
             rr.Transform3D(translation=[0.03, 0, 0.04], quaternion=Rotation.from_euler('y', -20, degrees=True).as_quat()),
             rr.Pinhole(
                 fov_y=1.2,

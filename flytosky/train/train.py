@@ -179,7 +179,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--device", type=str, default="")
     p.add_argument("--checkpoint-freq", type=int, default=100)
-    p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
+    p.add_argument("--checkpoint-dir", type=str, default=f'checkpoints/{time.strftime("%Y-%m-%d_%H-%M-%S")}')
     p.add_argument("--resume", type=str, default="")
     p.add_argument("--config-path", type=str, default="")
     return p.parse_args()
