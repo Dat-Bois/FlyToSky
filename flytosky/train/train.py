@@ -1,12 +1,10 @@
-"""CleanRL-style PPO training loop for the FlyToSky QuadcopterEnv."""
-
 from __future__ import annotations
 
 import argparse
-import logging
 import math
 import os
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -15,12 +13,21 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
 
-log = logging.getLogger("flytosky.train")
+from flytosky.logging import Log
 
+# Maximum curriculum level supported by VectorizedTrackGenerator
+MAX_CURRICULUM_LEVEL = 5
 
-# ---------------------------------------------------------------------------
-# Policy network
-# ---------------------------------------------------------------------------
+"""CleanRL-style PPO training loop for the FlyToSky QuadcopterEnv.
+
+Supports:
+- Curriculum-based learning: automatically advances track difficulty
+  (levels 0-5) based on rolling mean episode reward thresholds.
+- Dynamics randomization schedule: gradually increases randomization
+  delta as the curriculum progresses.
+- Full reward-component logging from the vectorized environment.
+- Checkpoint save / resume with curriculum state preserved.
+"""
 
 def layer_init(layer: nn.Linear, std: float = math.sqrt(2), bias_const: float = 0.0) -> nn.Linear:
     nn.init.orthogonal_(layer.weight, std)
@@ -29,16 +36,18 @@ def layer_init(layer: nn.Linear, std: float = math.sqrt(2), bias_const: float = 
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim: int = 19, act_dim: int = 4):
+    """Shared-encoder actor-critic with diagonal Gaussian policy."""
+
+    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 256):
         super().__init__()
         self.encoder = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 256)),
+            layer_init(nn.Linear(obs_dim, hidden)),
             nn.Tanh(),
-            layer_init(nn.Linear(256, 256)),
+            layer_init(nn.Linear(hidden, hidden)),
             nn.Tanh(),
         )
-        self.actor_mean = layer_init(nn.Linear(256, act_dim), std=0.01)
-        self.critic = layer_init(nn.Linear(256, 1), std=1.0)
+        self.actor_mean = layer_init(nn.Linear(hidden, act_dim), std=0.01)
+        self.critic = layer_init(nn.Linear(hidden, 1), std=1.0)
         self.log_std = nn.Parameter(torch.zeros(act_dim))
 
     def get_value(self, obs: torch.Tensor) -> torch.Tensor:
@@ -58,15 +67,74 @@ class ActorCritic(nn.Module):
         value = self.critic(hidden)
         return action, log_prob, entropy, value
 
+class CurriculumScheduler:
+    """Advance curriculum level when rolling mean reward exceeds a threshold.
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+    Each level has a reward threshold.  Once the agent sustains a rolling
+    mean episode reward above the threshold for ``patience`` consecutive
+    evaluations the level advances.  The scheduler also linearly ramps
+    dynamics randomisation delta with the level.
+    """
+
+    # Default reward thresholds per level
+    DEFAULT_THRESHOLDS: dict[int, float] = {
+        0: 5.0,    # straight lines mastered
+        1: 8.0,    # straight + variable height
+        2: 10.0,   # circles
+        3: 12.0,   # circles + variable height
+        4: 14.0,   # random walk mixes
+        # level 5 is terminal — no further promotion
+    }
+
+    def __init__(
+        self,
+        start_level: int = 0,
+        thresholds: dict[int, float] | None = None,
+        patience: int = 5,
+        max_dynamics_delta: float = 0.1,
+    ):
+        self.level = start_level
+        self.thresholds = thresholds or self.DEFAULT_THRESHOLDS
+        self.patience = patience
+        self.max_dynamics_delta = max_dynamics_delta
+        self._above_count = 0
+
+    def step(self, mean_reward: float) -> bool:
+        """Returns True if the level was just advanced."""
+        if self.level >= MAX_CURRICULUM_LEVEL:
+            return False
+        thresh = self.thresholds.get(self.level, float("inf"))
+        if mean_reward >= thresh:
+            self._above_count += 1
+        else:
+            self._above_count = 0
+        if self._above_count >= self.patience:
+            self.level = min(self.level + 1, MAX_CURRICULUM_LEVEL)
+            self._above_count = 0
+            return True
+        return False
+
+    @property
+    def dynamics_delta(self) -> float:
+        """Linearly scale dynamics randomisation with curriculum level."""
+        if MAX_CURRICULUM_LEVEL == 0:
+            return 0.0
+        return self.max_dynamics_delta * (self.level / MAX_CURRICULUM_LEVEL)
+
+    def state_dict(self) -> dict:
+        return {"level": self.level, "_above_count": self._above_count}
+
+    def load_state_dict(self, d: dict) -> None:
+        self.level = d["level"]
+        self._above_count = d.get("_above_count", 0)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PPO training for QuadcopterEnv")
+
+    # --- PPO hyper-parameters ---
     p.add_argument("--num-envs", type=int, default=64)
-    p.add_argument("--num-steps", type=int, default=128)
+    p.add_argument("--num-steps", type=int, default=128,
+                   help="Rollout horizon per update")
     p.add_argument("--total-timesteps", type=int, default=50_000_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
@@ -78,6 +146,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-minibatches", type=int, default=4)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--anneal-lr", type=lambda x: x.lower() == "true", default=True)
+
+    # --- Environment ---
+    p.add_argument("--max-episode-length", type=int, default=1000)
+    p.add_argument("--num-track-points", type=int, default=10)
+    p.add_argument("--dt", type=float, default=0.01)
+
+    # --- Curriculum ---
+    p.add_argument("--curriculum-start-level", type=int, default=0,
+                   help="Initial curriculum level (0-5)")
+    p.add_argument("--curriculum-patience", type=int, default=5,
+                   help="Consecutive above-threshold evals to advance")
+    p.add_argument("--max-dynamics-delta", type=float, default=0.1,
+                   help="Max dynamics randomisation delta (at highest level)")
+
+    # --- Infra ---
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--device", type=str, default="")
     p.add_argument("--checkpoint-freq", type=int, default=100)
@@ -86,26 +169,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config-path", type=str, default="")
     return p.parse_args()
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main() -> None:
     args = parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    Log.init("quadcopter_env")
 
     # Device selection
     if args.device:
         device = torch.device(args.device)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info("Using device: %s", device)
+    Log.info(f"Using device: {device}")
 
     # Seeding
     torch.manual_seed(args.seed)
@@ -117,7 +191,14 @@ def main() -> None:
     else:
         env_dir = Path(__file__).resolve().parent.parent / "environment"
         config_path = str(env_dir / "quad_params.json")
-    log.info("Config path: %s", config_path)
+    Log.info(f"Config path: {config_path}")
+
+    # Curriculum scheduler
+    curriculum = CurriculumScheduler(
+        start_level=args.curriculum_start_level,
+        patience=args.curriculum_patience,
+        max_dynamics_delta=args.max_dynamics_delta,
+    )
 
     # Create environment
     from flytosky.environment.quadcopter_env import QuadcopterEnv
@@ -125,28 +206,33 @@ def main() -> None:
     env = QuadcopterEnv(
         num_envs=args.num_envs,
         config_path=config_path,
+        max_episode_length=args.max_episode_length,
+        dt=args.dt,
+        num_track_points=args.num_track_points,
+        dynamics_randomization_delta=curriculum.dynamics_delta,
         device=str(device),
     )
+
+    # Read spaces dynamically from the env
+    obs_dim = env.single_observation_space.shape[0]
+    act_dim = env.single_action_space.shape[0]
 
     # Derived sizes
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
     num_updates = args.total_timesteps // batch_size
-    log.info(
-        "batch_size=%d  minibatch_size=%d  num_updates=%d",
-        batch_size, minibatch_size, num_updates,
+    Log.info(
+        f"obs_dim={obs_dim}  act_dim={act_dim}  batch_size={batch_size}  "
+        f"minibatch_size={minibatch_size}  num_updates={num_updates}"
     )
 
     # Policy
-    agent = ActorCritic(
-        obs_dim=env.single_observation_space.shape[0],
-        act_dim=env.single_action_space.shape[0],
-    ).to(device)
+    agent = ActorCritic(obs_dim=obs_dim, act_dim=act_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
-    # Rollout storage
-    obs_buf = torch.zeros(args.num_steps, args.num_envs, *env.single_observation_space.shape, device=device)
-    actions_buf = torch.zeros(args.num_steps, args.num_envs, *env.single_action_space.shape, device=device)
+    # Rollout storage  (all tensors on device — env already returns GPU tensors)
+    obs_buf = torch.zeros(args.num_steps, args.num_envs, obs_dim, device=device)
+    actions_buf = torch.zeros(args.num_steps, args.num_envs, act_dim, device=device)
     logprobs_buf = torch.zeros(args.num_steps, args.num_envs, device=device)
     rewards_buf = torch.zeros(args.num_steps, args.num_envs, device=device)
     dones_buf = torch.zeros(args.num_steps, args.num_envs, device=device)
@@ -161,19 +247,26 @@ def main() -> None:
         optimizer.load_state_dict(ckpt["optimizer"])
         global_step = ckpt["global_step"]
         start_update = ckpt["update"] + 1
-        log.info("Resumed from %s  (global_step=%d, update=%d)", args.resume, global_step, start_update - 1)
+        if "curriculum" in ckpt:
+            curriculum.load_state_dict(ckpt["curriculum"])
+            # Apply restored curriculum to env
+            env.curriculum_level = curriculum.level
+            env.dynamics_randomization_delta = curriculum.dynamics_delta
+        Log.info(
+            f"Resumed from {args.resume}  (global_step={global_step}, "
+            f"update={start_update - 1}, curriculum={curriculum.level})"
+        )
 
     # Checkpoint directory
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     # Initial reset
     next_obs, _ = env.reset(seed=args.seed)
-    next_obs = next_obs.to(device)
     next_done = torch.zeros(args.num_envs, device=device)
 
-    # Episode tracking
-    ep_rewards: list[float] = []
-    ep_lengths: list[float] = []
+    # Rolling episode stats (from env info dict)
+    ep_reward_history: deque[float] = deque(maxlen=100)
+    ep_length_history: deque[float] = deque(maxlen=100)
 
     start_time = time.time()
 
@@ -196,22 +289,25 @@ def main() -> None:
             actions_buf[step] = action
             logprobs_buf[step] = logprob
 
+            # env.step returns tensors already on device
             next_obs, reward, terminated, truncated, infos = env.step(action)
-            next_obs = next_obs.to(device)
-            rewards_buf[step] = reward.to(device)
-            next_done = (terminated | truncated).float().to(device)
+            rewards_buf[step] = reward
+            next_done = (terminated | truncated).float()
 
-            # Track completed episodes from env info
-            if infos and isinstance(infos, list) and len(infos) > 0:
+            # Collect completed-episode stats from the env info dict.
+            # infos is a list with a single aggregated dict.
+            if infos and len(infos) > 0:
                 info = infos[0]
-                if "episode_reward_mean" in info and info.get("episode_length_mean", 0) > 0:
-                    ep_rewards.append(info["episode_reward_mean"])
-                    ep_lengths.append(info["episode_length_mean"])
+                ep_rew = info.get("episode_reward_mean", float("nan"))
+                ep_len = info.get("episode_length_mean", float("nan"))
+                if not math.isnan(ep_rew) and not math.isnan(ep_len) and ep_len > 0:
+                    ep_reward_history.append(ep_rew)
+                    ep_length_history.append(ep_len)
 
         # ---- GAE ----
         with torch.no_grad():
             next_value = agent.get_value(next_obs).flatten()
-            advantages = torch.zeros_like(rewards_buf, device=device)
+            advantages = torch.zeros_like(rewards_buf)
             lastgaelam = 0.0
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
@@ -225,9 +321,9 @@ def main() -> None:
             returns = advantages + values_buf
 
         # ---- Flatten batches ----
-        b_obs = obs_buf.reshape(-1, *env.single_observation_space.shape)
+        b_obs = obs_buf.reshape(-1, obs_dim)
         b_logprobs = logprobs_buf.reshape(-1)
-        b_actions = actions_buf.reshape(-1, *env.single_action_space.shape)
+        b_actions = actions_buf.reshape(-1, act_dim)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values_buf.reshape(-1)
@@ -276,33 +372,49 @@ def main() -> None:
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
+        # ---- Curriculum update ----
+        rolling_mean_reward = float(np.mean(ep_reward_history)) if ep_reward_history else float("nan")
+        levelled_up = False
+        if not math.isnan(rolling_mean_reward):
+            levelled_up = curriculum.step(rolling_mean_reward)
+            if levelled_up:
+                env.curriculum_level = curriculum.level
+                env.dynamics_randomization_delta = curriculum.dynamics_delta
+                Log.info(
+                    f">>> CURRICULUM LEVEL UP -> {curriculum.level}  "
+                    f"(dynamics_delta={curriculum.dynamics_delta:.3f})"
+                )
+
         # ---- Logging ----
         elapsed = time.time() - start_time
         sps = int(global_step / elapsed) if elapsed > 0 else 0
-        mean_ep_reward = np.mean(ep_rewards[-50:]) if ep_rewards else float("nan")
-        mean_ep_length = np.mean(ep_lengths[-50:]) if ep_lengths else float("nan")
+        rolling_mean_length = float(np.mean(ep_length_history)) if ep_length_history else float("nan")
 
         y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 
-        log.info(
-            "update %4d | step %10d | SPS %6d | ep_rew %8.2f | ep_len %6.1f | "
-            "pi_loss %7.4f | v_loss %7.4f | entropy %6.3f | approx_kl %6.4f | "
-            "clipfrac %5.3f | explained_var %5.3f | lr %.2e",
-            update,
-            global_step,
-            sps,
-            mean_ep_reward,
-            mean_ep_length,
-            pg_loss.item(),
-            v_loss.item(),
-            entropy_loss.item(),
-            approx_kl,
-            np.mean(clipfracs),
-            explained_var,
-            optimizer.param_groups[0]["lr"],
+        # Grab latest reward components from env info (last step of rollout)
+        info = infos[0] if infos else {}
+
+        Log.info(
+            f"update {update:4d} | step {global_step:10d} | SPS {sps:6d} | "
+            f"ep_rew {rolling_mean_reward:8.2f} | ep_len {rolling_mean_length:6.1f} | "
+            f"pi_loss {pg_loss.item():7.4f} | v_loss {v_loss.item():7.4f} | "
+            f"entropy {entropy_loss.item():6.3f} | approx_kl {approx_kl:6.4f} | "
+            f"clipfrac {np.mean(clipfracs):5.3f} | expl_var {explained_var:5.3f} | "
+            f"lr {optimizer.param_groups[0]['lr']:.2e} | curriculum {curriculum.level}"
         )
+        # Log reward components when available
+        component_keys = ["mean_progress", "mean_wp_passed", "mean_action_smoothness",
+                          "mean_ang_vel", "mean_orientation"]
+        parts = []
+        for k in component_keys:
+            v = info.get(k, float("nan"))
+            short = k.replace("mean_", "")
+            parts.append(f"{short}={v:+.4f}")
+        if parts:
+            Log.info("  reward components: " + "  ".join(parts))
 
         # ---- Checkpointing ----
         if update % args.checkpoint_freq == 0 or update == num_updates:
@@ -311,16 +423,20 @@ def main() -> None:
                 "optimizer": optimizer.state_dict(),
                 "global_step": global_step,
                 "update": update,
+                "curriculum": curriculum.state_dict(),
                 "args": vars(args),
             }
             ckpt_path = os.path.join(args.checkpoint_dir, f"update_{update:06d}.pt")
             torch.save(ckpt_data, ckpt_path)
             latest_path = os.path.join(args.checkpoint_dir, "latest.pt")
             torch.save(ckpt_data, latest_path)
-            log.info("Saved checkpoint: %s", ckpt_path)
+            Log.info(f"Saved checkpoint: {ckpt_path}")
 
     elapsed = time.time() - start_time
-    log.info("Training complete. %d steps in %.1fs (%.0f SPS)", global_step, elapsed, global_step / elapsed)
+    Log.info(
+        f"Training complete. {global_step} steps in {elapsed:.1f}s "
+        f"({global_step / elapsed:.0f} SPS)  final curriculum level: {curriculum.level}"
+    )
     env.close()
 
 

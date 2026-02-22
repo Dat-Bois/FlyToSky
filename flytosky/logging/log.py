@@ -1,5 +1,5 @@
 import time
-import psutil
+import inspect
 import logging
 import numpy as np
 from typing import Tuple
@@ -36,28 +36,57 @@ class ColoredFormatter(logging.Formatter):
         return formatter.format(record)
 
 class Log:
-    """A centralized and standardized high-level logger interface. </br>
-    Incorporates both console, file logging, and rerun logging."""
+    """A high-level logger that supports multiple named loggers with
+    independent log files while sharing a single Rerun session."""
 
-    initialized: bool = False
-    console: logging.Logger
+    _rerun_initialized: bool = False
+    _output_path: Path | None = None
+    _loggers: dict[str, logging.Logger] = {}  # filename_stem -> Logger
+
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
 
     @staticmethod
     def init(rrd_filename: str = "") -> None:
-        if not Log.initialized:
-            output_path = file_path / "Logs" / time.strftime("%Y-%m-%d_%H-%M-%S")
-            output_path.mkdir(parents=True, exist_ok=True)
-            Log.console = Log.__create_console_logger(
-                rrd_filename, output_path
-            )
-            Log.__init_rerun(output_path, rrd_filename+".rrd")
-            Log.initialized = True
+        """Set up the shared output directory and Rerun session.
+
+        Safe to call multiple times — subsequent calls are no-ops.
+        """
+        if Log._output_path is not None:
+            return
+
+        output_path = file_path / "Logs" / time.strftime("%Y-%m-%d_%H-%M-%S")
+        output_path.mkdir(parents=True, exist_ok=True)
+        Log._output_path = output_path
+
+        Log._init_rerun(output_path, (rrd_filename or "flytosky") + ".rrd")
+
+    # ------------------------------------------------------------------
+    # Caller-aware logger resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_caller_logger() -> logging.Logger:
+        """Return the ``logging.Logger`` for the file that called into
+        ``Log``.  Creates one (with its own log file) on first access.
+
+        Stack: [0] _get_caller_logger → [1] Log.info/debug/… → [2] caller
+        """
+        frame = inspect.stack()[2]
+        name = Path(frame.filename).stem  # e.g. "train", "quadcopter_env"
+
+        if name not in Log._loggers:
+            Log._loggers[name] = Log._create_console_logger(name, Log._output_path)
+        return Log._loggers[name]
+
+    # ------------------------------------------------------------------
+    # Rerun (shared)
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _send_layout():
         """Constructs and sends the blueprint with panels for all logged data."""
-        Log.debug("Sending Rerun layout blueprint.")
-
         drone_3d = rrb.Spatial3DView(name="Drone View", origin="local")
 
         actions_plot = rrb.TimeSeriesView(name="Actions", origin="actions")
@@ -86,31 +115,36 @@ class Log:
         rr.send_blueprint(blueprint)
 
     @staticmethod
-    def __init_rerun(logs_path: Path, rrd_filename: str) -> None:
-        rr.init(f"[{rrd_filename.removesuffix(".rrd")}] " + str(logs_path))
+    def _init_rerun(logs_path: Path, rrd_filename: str) -> None:
+        if Log._rerun_initialized:
+            return
+        rr.init(f"[{rrd_filename.removesuffix('.rrd')}] " + str(logs_path))
         Log._send_layout()
         rr.save(str(logs_path / rrd_filename))
+        Log._rerun_initialized = True
 
     @staticmethod
-    def __create_console_logger(
+    def _create_console_logger(
         name: str, output_path: Path | None = None
     ) -> logging.Logger:
         logger: logging.Logger = logging.getLogger(name)
-        # logger.handlers.clear()  # Clear any existing handlers
-        logger.setLevel(logging.DEBUG)  # Set the overall logging level
+
+        # Avoid adding duplicate handlers if get_logger is called twice
+        # for the same underlying logging name.
+        if logger.handlers:
+            return logger
+
+        logger.setLevel(logging.DEBUG)
 
         if output_path:
             file_handler = logging.FileHandler(output_path / f"{name}.log")
-            file_handler.setLevel(logging.DEBUG)  # Capture all logs
+            file_handler.setLevel(logging.DEBUG)
             file_formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
             file_handler.setFormatter(file_formatter)
             logger.addHandler(file_handler)
 
-        # Create console handler
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)  # Only show INFO and above on console
-
-        # Define log format
+        console_handler.setLevel(logging.INFO)
         console_formatter = ColoredFormatter(
             "%(name)s: %(asctime)s %(levelname)s %(message)s"
         )
@@ -123,38 +157,41 @@ class Log:
     @staticmethod
     def debug(message: str) -> None:
         rr.set_time("unix_time", timestamp=time.time())
-        Log.console.debug(message)
+        Log._get_caller_logger().debug(message)
         rr.log("console", rr.TextLog(message, level=rr.TextLogLevel.DEBUG))
 
     @staticmethod
     def info(message: str) -> None:
         rr.set_time("unix_time", timestamp=time.time())
-        Log.console.info(message)
+        Log._get_caller_logger().info(message)
         rr.log("console", rr.TextLog(message, level=rr.TextLogLevel.INFO))
 
     @staticmethod
     def warning(message: str, traceback: str = "") -> None:
         rr.set_time("unix_time", timestamp=time.time())
-        Log.console.warning(message)
+        logger = Log._get_caller_logger()
+        logger.warning(message)
         rr.log("console", rr.TextLog(message, level=rr.TextLogLevel.WARN))
         if traceback:
-            Log.console.debug(f"{message}\n{traceback}")
+            logger.debug(f"{message}\n{traceback}")
 
     @staticmethod
     def error(message: str, traceback: str = "") -> None:
         rr.set_time("unix_time", timestamp=time.time())
-        Log.console.error(message)
+        logger = Log._get_caller_logger()
+        logger.error(message)
         rr.log("console", rr.TextLog(message, level=rr.TextLogLevel.ERROR))
         if traceback:
-            Log.console.debug(f"{message}\n{traceback}")
+            logger.debug(f"{message}\n{traceback}")
 
     @staticmethod
     def critical(message: str, traceback: str = "") -> None:
         rr.set_time("unix_time", timestamp=time.time())
-        Log.console.critical(message)
+        logger = Log._get_caller_logger()
+        logger.critical(message)
         rr.log("console", rr.TextLog(message, level=rr.TextLogLevel.CRITICAL))
         if traceback:
-            Log.console.debug(f"{message}\n{traceback}")
+            logger.debug(f"{message}\n{traceback}")
 
     @staticmethod
     def log_drone_pose(position: np.ndarray, quaternion: np.ndarray, model_name="drone/drone_model"):

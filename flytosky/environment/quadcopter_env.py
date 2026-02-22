@@ -82,9 +82,6 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # target orientation (handled internally, always facing towards next waypoint)
         self._desired_quat_w = torch.zeros(self.num_envs, 4, device=self.device)
 
-        # init logging
-        Log.init("quadcopter_env")
-
         # Define action and observation spaces
         self.action_space = self.single_action_space
         self.observation_space = self.single_observation_space
