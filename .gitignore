@@ -2,6 +2,7 @@
 flytosky/train/checkpoints
 *resources
 flytosky/logging/Logs
+.vscode
 
 
 # Byte-compiled / optimized / DLL files

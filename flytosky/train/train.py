@@ -45,11 +45,11 @@ class ActorCritic(nn.Module):
         super().__init__()
         self.encoder = nn.Sequential(
             layer_init(nn.Linear(obs_dim, hidden)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden, hidden)),
-            nn.Tanh(),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden, hidden)),
-            nn.Tanh(),
+            nn.ReLU(),
         )
         self.actor_mean = layer_init(nn.Linear(hidden, act_dim), std=0.01)
         self.critic = layer_init(nn.Linear(hidden, 1), std=1.0)

@@ -31,10 +31,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         max_episode_length: int = 1000,
         dt: float = 0.01,
         progress_reward_scale: float = 100.0,
-        wp_passed_reward_scale: float = 5.0,
+        wp_passed_reward_scale: float = 50.0,
         action_smoothness_reward_scale: float = -5,
-        ang_vel_reward_scale: float = -5,
-        orientation_reward_scale: float = 100.0,
+        ang_vel_reward_scale: float = -0.5,
+        orientation_reward_scale: float = 20.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -436,7 +436,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         wx = new_angular_velocity[:, 0] # Roll rate
         wy = new_angular_velocity[:, 1] # Pitch rate
         wz = new_angular_velocity[:, 2] # Yaw rate
-        xy_spin_penalty = (torch.square(wx) + torch.square(wy)) 
+        xy_spin_penalty = torch.clamp(torch.square(wx) + torch.square(wy), max=50.0)
         z_spin_penalty = torch.square(wz)
         ang_vel = xy_spin_penalty + z_spin_penalty
         r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.2 * dt)
