@@ -211,6 +211,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             avg_rew = self._cumulative_rewards[reset_envs].mean().item()
             Log.info(f"Resetting {len(reset_envs)} envs | avg ep length: {avg_len:.0f} | avg ep reward: {avg_rew:.2f}")
             self._reset_idx(reset_envs)
+            # Recompute observations for reset envs so returned obs reflects
+            # the new episode start rather than the stale terminal state.
+            fresh_obs = self._get_observations()
+            self.observations[reset_envs] = fresh_obs[reset_envs]
 
         Log.render(
             position=self._position[0].detach().cpu().numpy(),
@@ -624,6 +628,11 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._quaternion[env_ids, 1] = 0.0
         self._quaternion[env_ids, 2] = 0.0
         self._quaternion[env_ids, 3] = sy
+        # Update desired quaternion so observations are correct after reset
+        self._desired_quat_w[env_ids, 0] = cy
+        self._desired_quat_w[env_ids, 1] = 0.0
+        self._desired_quat_w[env_ids, 2] = 0.0
+        self._desired_quat_w[env_ids, 3] = sy
         # random speed between 5 m/s and 15 m/s (use curriculum?) #TODO
         initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(5.0, 15.0)
         # masking speed: If wp 0, speed = 0. Else, speed = random.

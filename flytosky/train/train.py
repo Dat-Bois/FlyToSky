@@ -38,10 +38,12 @@ def layer_init(layer: nn.Linear, std: float = math.sqrt(2), bias_const: float = 
 class ActorCritic(nn.Module):
     """Shared-encoder actor-critic with diagonal Gaussian policy."""
 
-    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 256):
+    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 128):
         super().__init__()
         self.encoder = nn.Sequential(
             layer_init(nn.Linear(obs_dim, hidden)),
+            nn.Tanh(),
+            layer_init(nn.Linear(hidden, hidden)),
             nn.Tanh(),
             layer_init(nn.Linear(hidden, hidden)),
             nn.Tanh(),
@@ -89,19 +91,26 @@ class CurriculumScheduler:
     def __init__(
         self,
         start_level: int = 0,
+        max_level: int = MAX_CURRICULUM_LEVEL,
         thresholds: dict[int, float] | None = None,
         patience: int = 5,
         max_dynamics_delta: float = 0.1,
     ):
         self.level = start_level
+        self.max_level = min(max_level, MAX_CURRICULUM_LEVEL)
         self.thresholds = thresholds or self.DEFAULT_THRESHOLDS
         self.patience = patience
         self.max_dynamics_delta = max_dynamics_delta
         self._above_count = 0
 
+    @property
+    def completed(self) -> bool:
+        """True when the target max level has been reached."""
+        return self.level >= self.max_level
+
     def step(self, mean_reward: float) -> bool:
         """Returns True if the level was just advanced."""
-        if self.level >= MAX_CURRICULUM_LEVEL:
+        if self.level >= self.max_level:
             return False
         thresh = self.thresholds.get(self.level, float("inf"))
         if mean_reward >= thresh:
@@ -109,7 +118,7 @@ class CurriculumScheduler:
         else:
             self._above_count = 0
         if self._above_count >= self.patience:
-            self.level = min(self.level + 1, MAX_CURRICULUM_LEVEL)
+            self.level = min(self.level + 1, self.max_level)
             self._above_count = 0
             return True
         return False
@@ -117,33 +126,34 @@ class CurriculumScheduler:
     @property
     def dynamics_delta(self) -> float:
         """Linearly scale dynamics randomisation with curriculum level."""
-        if MAX_CURRICULUM_LEVEL == 0:
+        if self.max_level == 0:
             return 0.0
-        return self.max_dynamics_delta * (self.level / MAX_CURRICULUM_LEVEL)
+        return self.max_dynamics_delta * (self.level / self.max_level)
 
     def state_dict(self) -> dict:
-        return {"level": self.level, "_above_count": self._above_count}
+        return {"level": self.level, "max_level": self.max_level, "_above_count": self._above_count}
 
     def load_state_dict(self, d: dict) -> None:
         self.level = d["level"]
+        # Allow overriding max_level from the CLI rather than the checkpoint
         self._above_count = d.get("_above_count", 0)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PPO training for QuadcopterEnv")
 
     # --- PPO hyper-parameters ---
-    p.add_argument("--num-envs", type=int, default=64)
+    p.add_argument("--num-envs", type=int, default=4096)
     p.add_argument("--num-steps", type=int, default=128,
                    help="Rollout horizon per update")
     p.add_argument("--total-timesteps", type=int, default=50_000_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae-lambda", type=float, default=0.95)
-    p.add_argument("--clip-coef", type=float, default=0.2)
-    p.add_argument("--ent-coef", type=float, default=0.01)
+    p.add_argument("--clip-coef", type=float, default=0.1)
+    p.add_argument("--ent-coef", type=float, default=0.001)
     p.add_argument("--vf-coef", type=float, default=0.5)
     p.add_argument("--update-epochs", type=int, default=4)
-    p.add_argument("--num-minibatches", type=int, default=4)
+    p.add_argument("--num-minibatches", type=int, default=32)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--anneal-lr", type=lambda x: x.lower() == "true", default=True)
 
@@ -159,6 +169,8 @@ def parse_args() -> argparse.Namespace:
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
+    p.add_argument("--max-curriculum-level", type=int, default=MAX_CURRICULUM_LEVEL,
+                   help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---
     p.add_argument("--seed", type=int, default=1)
@@ -196,6 +208,7 @@ def main() -> None:
     # Curriculum scheduler
     curriculum = CurriculumScheduler(
         start_level=args.curriculum_start_level,
+        max_level=args.max_curriculum_level,
         patience=args.curriculum_patience,
         max_dynamics_delta=args.max_dynamics_delta,
     )
@@ -304,7 +317,7 @@ def main() -> None:
                     ep_reward_history.append(ep_rew)
                     ep_length_history.append(ep_len)
 
-        # ---- GAE ----
+        # ---- GAE ---- (generalized advantage estimation)
         with torch.no_grad():
             next_value = agent.get_value(next_obs).flatten()
             advantages = torch.zeros_like(rewards_buf)
