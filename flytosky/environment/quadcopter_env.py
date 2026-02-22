@@ -210,7 +210,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self._completed_episode_rewards[reset_envs] = self._cumulative_rewards[reset_envs]
             avg_len = self.episode_length_buf[reset_envs].float().mean().item()
             avg_rew = self._cumulative_rewards[reset_envs].mean().item()
-            Log.info(f"Resetting {len(reset_envs)} envs | avg ep length: {avg_len:.0f} | avg ep reward: {avg_rew:.2f}")
+            # Log.debug(f"Resetting {len(reset_envs)} envs | avg ep length: {avg_len:.0f} | avg ep reward: {avg_rew:.2f}")
             self._reset_idx(reset_envs)
             # Recompute observations for reset envs so returned obs reflects
             # the new episode start rather than the stale terminal state.
@@ -572,7 +572,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         if len(env_ids) == 0:
             return
 
-        Log.debug(f"_reset_idx: resetting {len(env_ids)} envs")
+        # Log.debug(f"_reset_idx: resetting {len(env_ids)} envs")
 
         # Reset episode tracking
         self.episode_length_buf[env_ids] = 0

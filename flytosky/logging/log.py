@@ -6,13 +6,10 @@ from typing import Tuple
 from pathlib import Path
 from scipy.spatial.transform import Rotation
 
-import sys
 import rerun as rr
 import rerun.blueprint as rrb
 
 file_path = Path(__file__).parent
-logged_model_names = {}
-
 
 class ColoredFormatter(logging.Formatter):
     def __init__(self, template: str) -> None:
@@ -76,7 +73,6 @@ class Log:
         """
         frame = inspect.stack()[2]
         name = Path(frame.filename).stem  # e.g. "train", "quadcopter_env"
-        print(f"Resolving logger for caller: {name}")
         if name not in Log._loggers:
             Log._loggers[name] = Log._create_console_logger(name, Log._output_path)
         return Log._loggers[name]
@@ -120,6 +116,18 @@ class Log:
         if Log._rerun_initialized:
             return
         rr.init(f"[{rrd_filename.removesuffix('.rrd')}] " + str(logs_path))
+        # Drone model setup
+        rr.log("local/drone", rr.Asset3D(path=file_path / "drone.obj"), static=True)
+        rr.log(
+            f"{"local/drone"}/camera",
+            rr.Transform3D(translation=[0.03, 0, 0.04], quaternion=Rotation.from_euler('y', -20, degrees=True).as_quat()),
+            rr.Pinhole(
+                fov_y=1.2,
+                aspect_ratio=1.7777778,
+                camera_xyz=rr.ViewCoordinates.FLU,
+                image_plane_distance=0.1,
+            ),
+        )
         Log._send_layout()
         rr.save(str(logs_path / rrd_filename))
         Log._rerun_initialized = True
@@ -129,7 +137,7 @@ class Log:
         name: str, output_path: Path | None = None
     ) -> logging.Logger:
         logger: logging.Logger = logging.getLogger(name)
-
+        logger.propagate = False 
         # Avoid adding duplicate handlers if get_logger is called twice
         # for the same underlying logging name.
         if logger.handlers:
@@ -193,22 +201,10 @@ class Log:
             logger.debug(f"{message}\n{traceback}")
 
     @staticmethod
-    def log_drone_pose(position: np.ndarray, quaternion: np.ndarray, model_name="drone/drone_model"):
-        if model_name not in logged_model_names:
-            rr.log(model_name, rr.Asset3D(path=file_path / "drone.obj"), static=True)
-            rr.log(
-                f"{model_name}/camera",
-                rr.Transform3D(translation=[0.03, 0, 0.04], quaternion=Rotation.from_euler('y', -20, degrees=True).as_quat()),
-                rr.Pinhole(
-                    fov_y=1.2,
-                    aspect_ratio=1.7777778,
-                    camera_xyz=rr.ViewCoordinates.FLU,
-                    image_plane_distance=0.1,
-                ),
-            )
-            logged_model_names[model_name] = True
+    def log_drone_pose(position: np.ndarray, quaternion: np.ndarray):
+        rr.set_time("unix_time", timestamp=time.time())
         rr.log(
-            model_name,
+            "local/drone",
             rr.Transform3D(
                 translation=position,
                 quaternion=(Rotation.from_quat(quaternion)).as_quat(),

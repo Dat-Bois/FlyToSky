@@ -7,6 +7,7 @@ import time
 from collections import deque
 from pathlib import Path
 
+from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
@@ -147,7 +148,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-envs", type=int, default=4096)
     p.add_argument("--num-steps", type=int, default=128,
                    help="Rollout horizon per update")
-    p.add_argument("--total-timesteps", type=int, default=50_000_000)
+    p.add_argument("--total-timesteps", type=int, default=500_000_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--gae-lambda", type=float, default=0.95)
@@ -280,14 +281,18 @@ def main() -> None:
 
     start_time = time.time()
 
-    for update in range(start_update, num_updates + 1):
+    train_pbar = tqdm(range(start_update, num_updates + 1), desc="Training",
+                      initial=start_update - 1, total=num_updates,
+                      unit="update", dynamic_ncols=True)
+    for update in train_pbar:
         # Learning rate annealing
         if args.anneal_lr:
             frac = 1.0 - (update - 1) / num_updates
             optimizer.param_groups[0]["lr"] = args.learning_rate * frac
 
         # ---- Rollout phase ----
-        for step in range(args.num_steps):
+        for step in tqdm(range(args.num_steps), desc="  Rollout",
+                         leave=False, dynamic_ncols=True):
             global_step += args.num_envs
             obs_buf[step] = next_obs
             dones_buf[step] = next_done
@@ -340,6 +345,8 @@ def main() -> None:
 
         # ---- PPO update ----
         clipfracs = []
+        ppo_pbar = tqdm(total=args.update_epochs * args.num_minibatches,
+                        desc="  PPO", leave=False, dynamic_ncols=True)
         for _epoch in range(args.update_epochs):
             b_inds = torch.randperm(batch_size, device=device)
             for start in range(0, batch_size, minibatch_size):
@@ -382,6 +389,9 @@ def main() -> None:
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
+                ppo_pbar.update(1)
+        ppo_pbar.close()
+
         # ---- Curriculum update ----
         rolling_mean_reward = float(np.mean(ep_reward_history)) if ep_reward_history else float("nan")
         levelled_up = False
@@ -407,7 +417,16 @@ def main() -> None:
         # Grab latest reward components from env info (last step of rollout)
         info = infos[0] if infos else {}
 
-        Log.info(
+        # Update main progress bar postfix with key metrics
+        train_pbar.set_postfix(
+            rew=f"{rolling_mean_reward:.2f}",
+            sps=sps,
+            lvl=curriculum.level,
+            pi=f"{pg_loss.item():.3f}",
+            vf=f"{v_loss.item():.3f}",
+        )
+
+        Log.debug(
             f"update {update:4d} | step {global_step:10d} | SPS {sps:6d} | "
             f"ep_rew {rolling_mean_reward:8.2f} | ep_len {rolling_mean_length:6.1f} | "
             f"pi_loss {pg_loss.item():7.4f} | v_loss {v_loss.item():7.4f} | "
@@ -424,7 +443,7 @@ def main() -> None:
             short = k.replace("mean_", "")
             parts.append(f"{short}={v:+.4f}")
         if parts:
-            Log.info("  reward components: " + "  ".join(parts))
+            Log.debug("  reward components: " + "  ".join(parts))
 
         # ---- Checkpointing ----
         if update % args.checkpoint_freq == 0 or update == num_updates:
@@ -442,6 +461,7 @@ def main() -> None:
             torch.save(ckpt_data, latest_path)
             Log.info(f"Saved checkpoint: {ckpt_path}")
 
+    train_pbar.close()
     elapsed = time.time() - start_time
     Log.info(
         f"Training complete. {global_step} steps in {elapsed:.1f}s "
