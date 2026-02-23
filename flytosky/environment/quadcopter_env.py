@@ -26,15 +26,15 @@ Randomized start positions infront of waypoints.
 class QuadcopterEnv(pufferlib.PufferEnv):
     def __init__(
         self,
-        num_envs: int = 1,
-        config_path: str = "quad_params.json",
-        max_episode_length: int = 1000,
-        dt: float = 0.01,
-        progress_reward_scale: float = 100.0,
-        wp_passed_reward_scale: float = 50.0,
-        action_smoothness_reward_scale: float = -3,
-        ang_vel_reward_scale: float = -2.0,
-        orientation_reward_scale: float = 50.0,
+        num_envs: int,
+        config_path: str,
+        max_episode_length: int,
+        dt: float,
+        progress_reward_scale: float,
+        wp_passed_reward_scale: float,
+        action_smoothness_reward_scale: float,
+        ang_vel_reward_scale: float,
+        orientation_reward_scale: float,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -85,7 +85,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # intital speed map by curriculum level
         self._speed_map = {
-            "0": (0.0, 0.0), # level 0: stationary start
+            "0": (0.0, 1.0), # level 0: stationary start / slightly forward
             "1": (0.0, 3.0), # level 1: random speed between 0 m/s and 3 m/s
             "2": (0.0, 3.0), # level 2: random speed between 0 m/s and 3 m/s
             "3": (2.0, 5.0), # level 3: random speed between 2 m/s and 5 m/s
@@ -463,8 +463,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.2 * dt)
         # orientation penalty (encourage facing towards goal)
         orientation_error_magnitude = torch.linalg.norm(orientation_error, dim=1)
-        orientation_reward_mapped = 1 - torch.tanh(orientation_error_magnitude / 0.5)
-        r_orient = orientation_reward_mapped * orientation_reward_scale * dt
+        orientation_error_mapped = torch.tanh(orientation_error_magnitude / 0.5)
+        r_orient = orientation_error_mapped * orientation_reward_scale * dt
         r_alive = 0.1 * dt # small reward just for being alive each step
 
         rewards = (
@@ -483,7 +483,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_passed.float(),
             action_diff * dt,
             ang_vel * dt,
-            orientation_reward_mapped * dt,
+            orientation_error_mapped * dt,
         ], dim=-1)
         # Scaled (actual reward contributions)
         scaled_reward_components = torch.stack([
@@ -685,7 +685,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         #init spawn
         is_start = (start_wp_idx == 0)
         spawn_pos = torch.where(is_start.unsqueeze(-1), origin_pos, prev_wp_pos)
-        spawn_noise = torch.randn_like(spawn_pos) * 0.5
+        spawn_noise = torch.randn_like(spawn_pos) * 0.1 #TODO: adjust with curriculum?
         spawn_pos_noisy = spawn_pos + spawn_noise
         # Clamp z so the drone doesn't spawn underground or too high
         spawn_pos_noisy[:, 2] = torch.clamp(spawn_pos_noisy[:, 2], min=0.5, max=4.5)

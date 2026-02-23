@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
                    help="Rollout horizon per update")
     p.add_argument("--total-timesteps", type=int, default=500_000_000)
     p.add_argument("--learning-rate", type=float, default=3e-4)
-    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--gae-lambda", type=float, default=0.95)
     p.add_argument("--clip-coef", type=float, default=0.1)
     p.add_argument("--ent-coef", type=float, default=0.001)
@@ -160,11 +160,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-minibatches", type=int, default=32)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     p.add_argument("--anneal-lr", type=lambda x: x.lower() == "true", default=True)
+    p.add_argument("--anneal-ent-coef", type=lambda x: x.lower() == "true", default=True)
 
     # --- Environment ---
-    p.add_argument("--max-episode-length", type=int, default=1000)
+    p.add_argument("--max-episode-length", type=int, default=2000)
     p.add_argument("--num-track-points", type=int, default=10)
     p.add_argument("--dt", type=float, default=0.01)
+
+    # --- Rewards ----
+    p.add_argument("--progress-reward-scale", type=float, default=50.0)
+    p.add_argument("--wp-passed-reward-scale", type=float, default=70.0)
+    p.add_argument("--action-smoothness-reward-scale", type=float, default=-8.0)
+    p.add_argument("--ang-vel-reward-scale", type=float, default=-5.0)
+    p.add_argument("--orientation-reward-scale", type=float, default=-20.0)
 
     # --- Curriculum ---
     p.add_argument("--curriculum-start-level", type=int, default=0,
@@ -191,6 +199,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     Log.init()
+    Log.debug("Starting PPO training with arguments:")
+    for k, v in vars(args).items():
+        Log.debug(f"  {k}: {v}")
+    Log.debug(f"Max curriculum level supported by environment: {MAX_CURRICULUM_LEVEL}")
     # Device selection
     if args.device:
         device = torch.device(args.device)
@@ -223,6 +235,11 @@ def main() -> None:
         config_path=config_path,
         max_episode_length=args.max_episode_length,
         dt=args.dt,
+        progress_reward_scale=args.progress_reward_scale,
+        wp_passed_reward_scale=args.wp_passed_reward_scale,
+        action_smoothness_reward_scale=args.action_smoothness_reward_scale,
+        ang_vel_reward_scale=args.ang_vel_reward_scale,
+        orientation_reward_scale=args.orientation_reward_scale,
         num_track_points=args.num_track_points,
         dynamics_randomization_delta=curriculum.dynamics_delta,
         device=str(device),
@@ -299,6 +316,11 @@ def main() -> None:
         if args.anneal_lr:
             frac = 1.0 - (update - 1) / num_updates
             optimizer.param_groups[0]["lr"] = args.learning_rate * frac
+        if args.anneal_ent_coef:
+            frac = 1.0 - (update - 1) / num_updates
+            ent_coef = args.ent_coef * frac
+        else:
+            ent_coef = args.ent_coef
 
         # ---- Rollout phase ----
         for step in tqdm(range(args.num_steps), desc="  Rollout",
