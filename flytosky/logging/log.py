@@ -16,13 +16,14 @@ class ColoredFormatter(logging.Formatter):
         super().__init__(template)
         # https://stackoverflow.com/questions/384076/how-can-i-color-python-logging-output
         grey = "\x1b[38;20m"
+        cyan = "\x1b[36;20m"
         yellow = "\x1b[33;20m"
         red = "\x1b[31;20m"
         bold_red = "\x1b[31;1m"
         reset = "\x1b[0m"
         self.FORMATS = {
             logging.DEBUG: grey + template + reset,
-            logging.INFO: grey + template + reset,
+            logging.INFO: cyan + template + reset,
             logging.WARNING: yellow + template + reset,
             logging.ERROR: red + template + reset,
             logging.CRITICAL: bold_red + template + reset,

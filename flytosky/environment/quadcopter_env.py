@@ -32,8 +32,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         dt: float = 0.01,
         progress_reward_scale: float = 100.0,
         wp_passed_reward_scale: float = 50.0,
-        action_smoothness_reward_scale: float = -5,
-        ang_vel_reward_scale: float = -0.5,
+        action_smoothness_reward_scale: float = -3,
+        ang_vel_reward_scale: float = -2.0,
         orientation_reward_scale: float = 20.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -112,7 +112,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # Actions and forces
         self._actions = torch.zeros(self.num_envs, 4, device=self.device)
-        self._last_actions_0_1 = torch.zeros(self.num_envs, 4, device=self.device)
+        self._last_actions = torch.zeros(self.num_envs, 4, device=self.device)  # normalized [-1, 1]
+        self._last_actions_rpm = torch.zeros(self.num_envs, 4, device=self.device)
         self._rotor_speeds = torch.zeros(self.num_envs, 4, device=self.device)
         self._total_thrust_body = torch.zeros(self.num_envs, 3, device=self.device)
 
@@ -186,27 +187,34 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # Process actions and apply physics
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        actions_0_1 = self._max_rpm * (self._actions + 1.0) / 2.0
+        actions_rpm = self._max_rpm * (self._actions + 1.0) / 2.0
 
         # Accumulate rewards and reward components across decimation sub-steps.
         # Only the final sub-step's observations, terminals, etc. are kept.
         total_rewards = torch.zeros(self.num_envs, device=self.device)
-        total_reward_components = torch.zeros(self.num_envs, 5, device=self.device)
+        total_unscaled_components = torch.zeros(self.num_envs, 5, device=self.device)
+        total_scaled_components = torch.zeros(self.num_envs, 5, device=self.device)
 
         for _ in range(self._decimation_steps):
-            self._physics_substep(actions_0_1)
+            self._physics_substep(actions_rpm)
             total_rewards += self.rewards
-            total_reward_components += self._last_reward_components
+            total_unscaled_components += self._last_unscaled_reward_components
+            total_scaled_components += self._last_scaled_reward_components
 
-        self._last_actions_0_1 = actions_0_1.clone()
+        self._last_actions = self._actions.clone()
+        self._last_actions_rpm = actions_rpm.clone()
 
         self.rewards = total_rewards
+        component_names = ["progress", "wp_passed", "action_smoothness", "ang_vel", "orientation"]
+        # Unscaled rewards dict for episode tracking
         rewards_dict = {
-            "progress": total_reward_components[:, 0],
-            "wp_passed": total_reward_components[:, 1],
-            "action_smoothness": total_reward_components[:, 2],
-            "ang_vel": total_reward_components[:, 3],
-            "orientation": total_reward_components[:, 4],
+            name: total_unscaled_components[:, i]
+            for i, name in enumerate(component_names)
+        }
+        # Scaled rewards dict for tensorboard
+        scaled_rewards_dict = {
+            name: total_scaled_components[:, i]
+            for i, name in enumerate(component_names)
         }
         for key, value in rewards_dict.items():
             self._episode_sums[key] += value
@@ -246,6 +254,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         }
         for key, value in rewards_dict.items():
             info[f"mean_{key}"] = value.mean().item()
+        for key, value in scaled_rewards_dict.items():
+            info[f"mean_scaled_{key}"] = value.mean().item()
         valid_mask = ~torch.isnan(self._completed_episode_lengths)
         if valid_mask.any():
             valid_lengths = self._completed_episode_lengths[valid_mask]
@@ -269,8 +279,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
     
     def _physics_step_impl(
         self,
-        actions_0_1: torch.Tensor,
-        last_actions_0_1: torch.Tensor,
+        actions_rpm: torch.Tensor,
+        actions_normalized: torch.Tensor,
+        last_actions_normalized: torch.Tensor,
+        last_actions_rpm: torch.Tensor,
         rotor_speeds: torch.Tensor,
         position: torch.Tensor,
         velocity: torch.Tensor,
@@ -301,8 +313,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
     ):
         """Pure computation kernel for physics step - compiled by torch.compile."""
         # Apply motor delay
-        rising_mask = actions_0_1 > rotor_speeds
-        diffs = actions_0_1 - rotor_speeds
+        rising_mask = actions_rpm > rotor_speeds
+        diffs = actions_rpm - rotor_speeds
         delay_constants = torch.where(rising_mask, rising_delay_constants, falling_delay_constants)
         new_rotor_speeds = rotor_speeds + diffs * delay_constants * dt
 
@@ -347,7 +359,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         angular_acc = inertia_inv * (torque_body - gyroscopic)
 
         # Update angular velocity
-        new_angular_velocity = torch.clamp(angular_velocity + angular_acc * dt, -1e12, 1e12)
+        new_angular_velocity = torch.clamp(angular_velocity + angular_acc * dt, -100, 100)
 
         # Update quaternion
         # dq/dt = 0.5 * q * omega_quat
@@ -403,13 +415,20 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - new_position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, new_quaternion)
-            future_rel_wp.append(rel_pos_body * (0.2**i))  # scale down for stability
+            future_rel_wp.append(rel_pos_body * (0.35**(i+1)))  # scale down for stability
+
+        # create copy of new angular velocity and orientation error to scale down
+        o_new_angular_velocity = new_angular_velocity.clone()
+        o_new_angular_velocity[:, :2] *= 0.025
+        o_new_angular_velocity[:, 2] *= 0.3
+        o_orientation_error = orientation_error.clone()
+        o_orientation_error[:, :2] *= 0.3
 
         observations = torch.cat([
-            velocity_body * 0.1,           # 3
-            new_angular_velocity * 0.1,    # 3
+            velocity_body * 0.5,           # 3
+            o_new_angular_velocity,    # 3
             gravity_body,            # 3
-            orientation_error,       # 3
+            o_orientation_error,       # 3
             rpm_scaled,              # 4
             *future_rel_wp           # 3 * lookahead(3) = 9
         ], dim=-1)
@@ -429,14 +448,14 @@ class QuadcopterEnv(pufferlib.PufferEnv):
 
         # penalties
 
-        # action penalty
-        action_diff = torch.norm(actions_0_1 - last_actions_0_1, dim=1)
+        # action penalty (use normalized [-1,1] actions so penalty is RPM-independent)
+        action_diff = torch.norm(actions_normalized - last_actions_normalized, dim=1)
         r_smooth = action_smoothness_reward_scale * action_diff * dt
         # velocity penalty (encourage smooth flight)
         wx = new_angular_velocity[:, 0] # Roll rate
         wy = new_angular_velocity[:, 1] # Pitch rate
         wz = new_angular_velocity[:, 2] # Yaw rate
-        xy_spin_penalty = torch.clamp(torch.square(wx) + torch.square(wy), max=50.0)
+        xy_spin_penalty = torch.clamp(torch.square(wx) + torch.square(wy), max=400.0)
         z_spin_penalty = torch.square(wz)
         ang_vel = xy_spin_penalty + z_spin_penalty
         r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.2 * dt)
@@ -444,29 +463,41 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         orientation_error_magnitude = torch.linalg.norm(orientation_error, dim=1)
         orientation_reward_mapped = 1 - torch.tanh(orientation_error_magnitude / 0.5)
         r_orient = orientation_reward_mapped * orientation_reward_scale * dt
+        r_alive = 0.1 * dt # small reward just for being alive each step
 
         rewards = (
             r_progress +
             r_wp +
             r_smooth +
             r_ang_vel +
-            r_orient
+            r_orient +
+            r_alive
         )
 
-        # Reward components for logging (unscaled)
-        reward_components = torch.stack([
+        # Reward components for logging
+        # Unscaled (raw values before reward scaling)
+        unscaled_reward_components = torch.stack([
             delta_progress,
             wp_passed.float(),
             action_diff * dt,
             ang_vel * dt,
             orientation_reward_mapped * dt,
         ], dim=-1)
+        # Scaled (actual reward contributions)
+        scaled_reward_components = torch.stack([
+            r_progress,
+            r_wp,
+            r_smooth,
+            r_ang_vel,
+            r_orient,
+        ], dim=-1)
 
         # Check for termination
         dist_to_target = torch.linalg.norm(desired_pos_w - new_position, dim=1)
         lost = dist_to_target > 8.0
         track_completed = (target_wp_idx + wp_passed.long()) >= (wp_positions.shape[1])
-        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed
+        spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
+        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out
 
         return (
             new_rotor_speeds,
@@ -477,13 +508,14 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             total_thrust_body,
             observations,
             rewards,
-            reward_components,
+            unscaled_reward_components,
+            scaled_reward_components,
             died,
             new_target_idx,
             desired_quat_w
         )
 
-    def _physics_substep(self, actions_0_1: torch.Tensor):
+    def _physics_substep(self, actions_rpm: torch.Tensor):
         """Run a single physics sub-step. Updates state in-place.
         Stores observations, rewards, terminals, and reward components
         but does NOT do episode bookkeeping or resets."""
@@ -497,13 +529,16 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self._total_thrust_body,
             self.observations,
             self.rewards,
-            self._last_reward_components,
+            self._last_unscaled_reward_components,
+            self._last_scaled_reward_components,
             self.terminals,
             self._target_wp_idx,
             self._desired_quat_w
         ) = self._compiled_physics_step( # this is _physics_step_impl wrapped by torch.compile
-            actions_0_1,
-            self._last_actions_0_1,
+            actions_rpm,
+            self._actions,
+            self._last_actions,
+            self._last_actions_rpm,
             self._rotor_speeds,
             self._position,
             self._velocity,
@@ -552,13 +587,20 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = self._wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - self._position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, self._quaternion)
-            future_rel_wp.append(rel_pos_body * (0.2**i))
+            future_rel_wp.append(rel_pos_body * (0.35**(i+1)))
+
+        # create copy of new angular velocity and orientation error to scale down
+        o_new_angular_velocity = self._angular_velocity.clone()
+        o_new_angular_velocity[:, :2] *= 0.025
+        o_new_angular_velocity[:, 2] *= 0.3
+        o_orientation_error = orientation_error.clone()
+        o_orientation_error[:, :2] *= 0.3
         
         obs = torch.cat([
             velocity_body * 0.1,           # 3
-            self._angular_velocity * 0.1,  # 3
+            o_new_angular_velocity,  # 3
             gravity_body,            # 3
-            orientation_error,       # 3
+            o_orientation_error,       # 3
             rpm_scaled,               # 4
             *future_rel_wp             # 3 * lookahead
         ], dim=-1)
@@ -667,7 +709,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         aim_dir = torch.nn.functional.normalize(aim_vec, dim=1)
         self._velocity[env_ids] = aim_dir * initial_speed
         self._angular_velocity[env_ids] = 0.0
-        self._last_actions_0_1[env_ids] = 0.0
+        self._last_actions[env_ids] = 0.0
+        self._last_actions_rpm[env_ids] = 0.0
 
     def close(self):
         Log.info("QuadcopterEnv closed.")

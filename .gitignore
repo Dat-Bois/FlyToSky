@@ -1,5 +1,6 @@
 # random stuff
 flytosky/train/checkpoints
+flytosky/train/runs
 *resources
 flytosky/logging/Logs
 .vscode

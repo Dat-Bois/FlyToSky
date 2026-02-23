@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Normal
+from torch.utils.tensorboard import SummaryWriter
 
 from flytosky.logging import Log
 from flytosky.environment.quadcopter_env import QuadcopterEnv
@@ -41,7 +42,7 @@ def layer_init(layer: nn.Linear, std: float = math.sqrt(2), bias_const: float = 
 class ActorCritic(nn.Module):
     """Shared-encoder actor-critic with diagonal Gaussian policy."""
 
-    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 64):
+    def __init__(self, obs_dim: int, act_dim: int, hidden: int = 128):
         super().__init__()
         self.encoder = nn.Sequential(
             layer_init(nn.Linear(obs_dim, hidden)),
@@ -182,6 +183,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint-dir", type=str, default=f'checkpoints/{time.strftime("%Y-%m-%d_%H-%M-%S")}')
     p.add_argument("--resume", type=str, default="")
     p.add_argument("--config-path", type=str, default="")
+    p.add_argument("--tensorboard-dir", type=str,
+                   default=f'runs/{time.strftime("%Y-%m-%d_%H-%M-%S")}',
+                   help="TensorBoard log directory")
     return p.parse_args()
 
 def main() -> None:
@@ -270,6 +274,12 @@ def main() -> None:
 
     # Checkpoint directory
     os.makedirs(args.checkpoint_dir, exist_ok=True)
+
+    # TensorBoard writer
+    writer = SummaryWriter(args.tensorboard_dir)
+    writer.add_text("hyperparameters",
+                    "|".join(f"{k}={v}" for k, v in vars(args).items()))
+    Log.info(f"TensorBoard logging to: {args.tensorboard_dir}")
 
     # Initial reset
     next_obs, _ = env.reset(seed=args.seed)
@@ -428,6 +438,33 @@ def main() -> None:
 
         if not math.isnan(rolling_mean_reward):
             Log.log_episode_reward_mean(rolling_mean_reward)
+        # Log reward components when available
+        component_keys = ["mean_progress", "mean_wp_passed", "mean_action_smoothness",
+                          "mean_ang_vel", "mean_orientation"]
+        scaled_component_keys = ["mean_scaled_progress", "mean_scaled_wp_passed", "mean_scaled_action_smoothness",
+                                 "mean_scaled_ang_vel", "mean_scaled_orientation"]
+        # ---- TensorBoard ----
+        writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
+        writer.add_scalar("charts/SPS", sps, global_step)
+        writer.add_scalar("charts/curriculum_level", curriculum.level, global_step)
+        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
+        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
+        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
+        writer.add_scalar("losses/approx_kl", approx_kl, global_step)
+        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
+        writer.add_scalar("losses/explained_variance", explained_var, global_step)
+        if not math.isnan(rolling_mean_reward):
+            writer.add_scalar("charts/episode_reward_mean", rolling_mean_reward, global_step)
+        if not math.isnan(rolling_mean_length):
+            writer.add_scalar("charts/episode_length_mean", rolling_mean_length, global_step)
+        for k in component_keys:
+            v = info.get(k, float("nan"))
+            if not math.isnan(v):
+                writer.add_scalar(f"reward_components/{k}", v, global_step)
+        for k in scaled_component_keys:
+            v = info.get(k, float("nan"))
+            if not math.isnan(v):
+                writer.add_scalar(f"reward_components_scaled/{k}", v, global_step)
 
         Log.debug(
             f"update {update:4d} | step {global_step:10d} | SPS {sps:6d} | "
@@ -437,9 +474,6 @@ def main() -> None:
             f"clipfrac {np.mean(clipfracs):5.3f} | expl_var {explained_var:5.3f} | "
             f"lr {optimizer.param_groups[0]['lr']:.2e} | curriculum {curriculum.level}"
         )
-        # Log reward components when available
-        component_keys = ["mean_progress", "mean_wp_passed", "mean_action_smoothness",
-                          "mean_ang_vel", "mean_orientation"]
         parts = []
         for k in component_keys:
             v = info.get(k, float("nan"))
@@ -465,6 +499,7 @@ def main() -> None:
             Log.info(f"Saved checkpoint: {ckpt_path}")
 
     train_pbar.close()
+    writer.close()
     elapsed = time.time() - start_time
     Log.info(
         f"Training complete. {global_step} steps in {elapsed:.1f}s "
