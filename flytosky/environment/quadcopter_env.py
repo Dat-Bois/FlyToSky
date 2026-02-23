@@ -35,6 +35,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         action_smoothness_reward_scale: float,
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
+        alive_reward_scale: float,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -66,6 +67,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.action_smoothness_reward_scale = action_smoothness_reward_scale
         self.ang_vel_reward_scale = ang_vel_reward_scale
         self.orientation_reward_scale = orientation_reward_scale
+        self.alive_reward_scale = alive_reward_scale
         
         # dynamics randomization range (percentage)
         self.dynamics_randomization_delta = dynamics_randomization_delta
@@ -310,6 +312,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         action_smoothness_reward_scale: float,
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
+        alive_reward_scale: float,
     ):
         """Pure computation kernel for physics step - compiled by torch.compile."""
         # Apply motor delay
@@ -465,7 +468,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         orientation_error_magnitude = torch.linalg.norm(orientation_error, dim=1)
         orientation_error_mapped = torch.tanh(orientation_error_magnitude / 0.5)
         r_orient = orientation_error_mapped * orientation_reward_scale * dt
-        r_alive = 0.1 * dt # small reward just for being alive each step
+        r_alive = alive_reward_scale * dt # small reward just for being alive each step
 
         rewards = (
             r_progress +
@@ -568,6 +571,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self.action_smoothness_reward_scale,
             self.ang_vel_reward_scale,
             self.orientation_reward_scale,
+            self.alive_reward_scale,
         )
 
     def _get_observations(self) -> torch.Tensor:
@@ -685,7 +689,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         #init spawn
         is_start = (start_wp_idx == 0)
         spawn_pos = torch.where(is_start.unsqueeze(-1), origin_pos, prev_wp_pos)
-        spawn_noise = torch.randn_like(spawn_pos) * 0.1 #TODO: adjust with curriculum?
+        spawn_noise = torch.randn_like(spawn_pos) * 0.3 #TODO: adjust with curriculum?
         spawn_pos_noisy = spawn_pos + spawn_noise
         # Clamp z so the drone doesn't spawn underground or too high
         spawn_pos_noisy[:, 2] = torch.clamp(spawn_pos_noisy[:, 2], min=0.5, max=4.5)

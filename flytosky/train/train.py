@@ -84,8 +84,8 @@ class CurriculumScheduler:
 
     # Default reward thresholds per level #TODO adjust
     DEFAULT_THRESHOLDS: dict[int, float] = {
-        0: 5.0,    # straight lines mastered
-        1: 8.0,    # straight + variable height
+        0: 400.0,    # straight lines mastered
+        1: 500.0,    # straight + variable height
         2: 10.0,   # circles
         3: 12.0,   # circles + variable height
         4: 14.0,   # random walk mixes
@@ -168,11 +168,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dt", type=float, default=0.01)
 
     # --- Rewards ----
-    p.add_argument("--progress-reward-scale", type=float, default=50.0)
+    p.add_argument("--progress-reward-scale", type=float, default=40.0)
     p.add_argument("--wp-passed-reward-scale", type=float, default=70.0)
-    p.add_argument("--action-smoothness-reward-scale", type=float, default=-8.0)
-    p.add_argument("--ang-vel-reward-scale", type=float, default=-5.0)
+    p.add_argument("--action-smoothness-reward-scale", type=float, default=-9.0)
+    p.add_argument("--ang-vel-reward-scale", type=float, default=-5.5)
     p.add_argument("--orientation-reward-scale", type=float, default=-20.0)
+    p.add_argument("--alive-reward-scale", type=float, default=-0.2)
 
     # --- Curriculum ---
     p.add_argument("--curriculum-start-level", type=int, default=0,
@@ -181,7 +182,7 @@ def parse_args() -> argparse.Namespace:
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
-    p.add_argument("--max-curriculum-level", type=int, default=0, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
+    p.add_argument("--max-curriculum-level", type=int, default=1, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
                    help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---
@@ -240,6 +241,7 @@ def main() -> None:
         action_smoothness_reward_scale=args.action_smoothness_reward_scale,
         ang_vel_reward_scale=args.ang_vel_reward_scale,
         orientation_reward_scale=args.orientation_reward_scale,
+        alive_reward_scale=args.alive_reward_scale,
         num_track_points=args.num_track_points,
         dynamics_randomization_delta=curriculum.dynamics_delta,
         device=str(device),

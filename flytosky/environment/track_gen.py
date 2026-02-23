@@ -139,9 +139,12 @@ class VectorizedTrackGenerator:
 
     def _generate_straight(self, settings: TrackSettings, env_ids: torch.Tensor, variable_height: bool):
         num_reset = len(env_ids)
-        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)    
-        x = torch.linspace(0, settings.length, settings.num_points, device=self.device)
-        waypoints[:, :, 0] = x.unsqueeze(0).expand(num_reset, -1)
+        waypoints = torch.zeros(num_reset, settings.num_points, 3, device=self.device)
+        # Randomly choose forward (0 → length) or backward (length → 0) traversal
+        forward = torch.randint(0, 2, (num_reset,), device=self.device).bool()
+        x_fwd = torch.linspace(0, settings.length, settings.num_points, device=self.device).unsqueeze(0).expand(num_reset, -1)
+        x_bwd = torch.linspace(settings.length, 0, settings.num_points, device=self.device).unsqueeze(0).expand(num_reset, -1)
+        waypoints[:, :, 0] = torch.where(forward.unsqueeze(1), x_fwd, x_bwd)
         waypoints[:, :, 1] = 0.0
         if variable_height:
             waypoints[:, :, 2] = torch.empty(num_reset, settings.num_points, device=self.device).uniform_(*settings.height_range)
