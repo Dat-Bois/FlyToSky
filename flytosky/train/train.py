@@ -82,7 +82,7 @@ class CurriculumScheduler:
     dynamics randomisation delta with the level.
     """
 
-    # Default reward thresholds per level
+    # Default reward thresholds per level #TODO adjust
     DEFAULT_THRESHOLDS: dict[int, float] = {
         0: 5.0,    # straight lines mastered
         1: 8.0,    # straight + variable height
@@ -173,7 +173,7 @@ def parse_args() -> argparse.Namespace:
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
-    p.add_argument("--max-curriculum-level", type=int, default=MAX_CURRICULUM_LEVEL,
+    p.add_argument("--max-curriculum-level", type=int, default=0, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
                    help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---
@@ -402,7 +402,7 @@ def main() -> None:
                 ppo_pbar.update(1)
         ppo_pbar.close()
 
-        # ---- Curriculum update ----
+        # ---- Curriculum update ---- #TODO, right now leveling up too early
         rolling_mean_reward = float(np.mean(ep_reward_history)) if ep_reward_history else float("nan")
         levelled_up = False
         if not math.isnan(rolling_mean_reward):

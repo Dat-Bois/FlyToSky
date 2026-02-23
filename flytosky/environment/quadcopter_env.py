@@ -34,7 +34,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         wp_passed_reward_scale: float = 50.0,
         action_smoothness_reward_scale: float = -3,
         ang_vel_reward_scale: float = -2.0,
-        orientation_reward_scale: float = 20.0,
+        orientation_reward_scale: float = 50.0,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -386,9 +386,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         dist_to_center_perp = torch.linalg.norm(perp_offset, dim=1)
         # We crossed if we went from negative (behind) to positive (ahead)
         # AND we are within a reasonable perpendicular distance to count it.
-        within_radius = dist_to_center_perp < 1.5
+        within_radius = dist_to_center_perp < 1.0
         crossed_plane = (dist_plane_old < 0) & (dist_plane_new >= 0)
         wp_passed = crossed_plane & within_radius
+        false_pass = crossed_plane & ~within_radius # kill or penalize quad if it misses wp #test
         new_target_idx = target_wp_idx + wp_passed.long()
         new_target_idx = torch.clamp(new_target_idx, max=wp_positions.shape[1]-1)
         desired_pos_w = wp_positions[batch_idx, new_target_idx]
@@ -423,9 +424,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         o_new_angular_velocity[:, 2] *= 0.3
         o_orientation_error = orientation_error.clone()
         o_orientation_error[:, :2] *= 0.3
+        o_orientation_error[:, 2] *= 0.5
 
         observations = torch.cat([
-            velocity_body * 0.5,           # 3
+            velocity_body * 0.07,           # 3
             o_new_angular_velocity,    # 3
             gravity_body,            # 3
             o_orientation_error,       # 3
@@ -497,7 +499,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         lost = dist_to_target > 8.0
         track_completed = (target_wp_idx + wp_passed.long()) >= (wp_positions.shape[1])
         spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
-        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out
+        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out | false_pass
 
         return (
             new_rotor_speeds,
@@ -595,9 +597,10 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         o_new_angular_velocity[:, 2] *= 0.3
         o_orientation_error = orientation_error.clone()
         o_orientation_error[:, :2] *= 0.3
+        o_orientation_error[:, 2] *= 0.5
         
         obs = torch.cat([
-            velocity_body * 0.1,           # 3
+            velocity_body * 0.07,           # 3
             o_new_angular_velocity,  # 3
             gravity_body,            # 3
             o_orientation_error,       # 3
@@ -685,7 +688,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         spawn_noise = torch.randn_like(spawn_pos) * 0.5
         spawn_pos_noisy = spawn_pos + spawn_noise
         # Clamp z so the drone doesn't spawn underground or too high
-        spawn_pos_noisy[:, 2] = torch.clamp(spawn_pos_noisy[:, 2], min=0.3, max=4.5)
+        spawn_pos_noisy[:, 2] = torch.clamp(spawn_pos_noisy[:, 2], min=0.5, max=4.5)
         self._position[env_ids] = spawn_pos_noisy
         # point yaw
         aim_vec = target_pos - self._position[env_ids]
@@ -702,7 +705,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._desired_quat_w[env_ids, 1] = 0.0
         self._desired_quat_w[env_ids, 2] = 0.0
         self._desired_quat_w[env_ids, 3] = sy
-        # random speed between 5 m/s and 15 m/s
+        # random speed 
         initial_speed = torch.empty(len(env_ids), 1, device=self.device).uniform_(*self._speed_map[str(self.curriculum_level)])
         # masking speed: If wp 0, speed = 0. Else, speed = random.
         initial_speed = torch.where(is_start.unsqueeze(-1), torch.zeros_like(initial_speed), initial_speed)
