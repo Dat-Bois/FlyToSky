@@ -5,57 +5,43 @@ title: Status
 
 ## Project Summary
 
-FlyToSky trains a quadrotor drone to autonomously fly through sequences of gate waypoints using deep reinforcement learning. Rather than relying on hand-tuned cascaded PID controllers, the agent learns a direct mapping from raw sensor observations — body-frame velocities, angular rates, rotor speeds, and relative waypoint positions — to continuous motor commands. The environment simulates a Crazyflie-class nano-quadrotor with realistic physics, including a quadratic thrust curve and first-order motor delay dynamics. Training uses Proximal Policy Optimization (PPO) with a curriculum that progressively increases track difficulty from straight-line gates to random 3D walks, while simultaneously ramping up dynamics randomization to encourage robustness.
+FlyToSky trains a quadrotor drone to autonomously fly through sequences of gate waypoints using deep reinforcement learning. Rather than relying on hand-tuned cascaded PID controllers, the agent learns a direct mapping from raw sensor observations — body-frame velocities, angular rates, rotor speeds, and relative waypoint positions — to continuous motor commands. The environment simulates realistic physics, including a quadratic thrust curve and first-order motor delay dynamics. Training uses Proximal Policy Optimization (PPO) with a curriculum that progressively increases track difficulty from straight-line gates to random 3D gates, while simultaneously ramping up dynamics randomization to encourage robustness.
 
 ## Approach
 
 ### Algorithm: Proximal Policy Optimization (PPO)
 
-We use PPO  with Generalized Advantage Estimation (GAE). The policy is a diagonal Gaussian: given observation $s_t$, the actor outputs a mean $\mu_\theta(s_t) \in \mathbb{R}^4$ and a learned (state-independent) log-standard deviation, so actions are sampled as $a_t \sim \mathcal{N}(\mu_\theta(s_t), \text{diag}(\sigma^2))$.
+We use PPO  with Generalized Advantage Estimation (GAE). The policy is a diagonal Gaussian: given observation $$s_t$$, the actor outputs a mean $$\mu_\theta(s_t) \in \mathbb{R}^4$$ and a learned (state-independent) log-standard deviation, so actions are sampled as $$a_t \sim \mathcal{N}(\mu_\theta(s_t), \text{diag}(\sigma^2))$$.
 
 **Clipped surrogate objective:**
 
 $$L^{\text{CLIP}}(\theta) = \hat{\mathbb{E}}_t \left[ \min\!\left( r_t(\theta)\,\hat{A}_t,\; \text{clip}(r_t(\theta), 1-\varepsilon, 1+\varepsilon)\,\hat{A}_t \right) \right]$$
 
-where $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_\text{old}}(a_t \mid s_t)$ is the probability ratio and $\hat{A}_t$ is the GAE advantage estimate.
+where $$r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_\text{old}}(a_t \mid s_t)$$ is the probability ratio and $$\hat{A}_t$$ is the GAE advantage estimate.
 
 **Combined loss** (policy + value + entropy):
 
 $$L(\theta) = -L^{\text{CLIP}}(\theta) + c_v L^{\text{VF}}(\theta) - c_e H[\pi_\theta]$$
 
-where $L^{\text{VF}}$ is a clipped MSE value loss and $H$ is the policy entropy bonus.
+where $$L^{\text{VF}}$$ is a clipped MSE value loss and $$H$$ is the policy entropy bonus.
 
-**GAE advantage** with discount $\gamma$ and trace $\lambda$:
+**GAE advantage** with discount $$\gamma$$ and trace $$\lambda$$:
 
 $$\hat{A}_t = \sum_{k=0}^{T-t-1} (\gamma\lambda)^k \delta_{t+k}, \qquad \delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)$$
 
 ### Network Architecture
 
-Both actor and critic share a common encoder: two fully-connected layers of 256 hidden units each with Tanh activations, initialized with orthogonal weight matrices (gain $\sqrt{2}$). The actor head is a linear projection to 4 outputs (std 0.01 init) and the critic head is a linear projection to a scalar (std 1.0 init). The $\log \sigma$ vector is a free parameter initialized to zero.
+Both actor and critic share a common encoder: two fully-connected layers of 256 hidden units each with Tanh activations, initialized with orthogonal weight matrices (gain $$\sqrt{2}$$). The actor head is a linear projection to 4 outputs (std 0.01 init) and the critic head is a linear projection to a scalar (std 1.0 init). The $$\log \sigma$$ vector is a free parameter initialized to zero.
 
 ### Environment and Physics
 
-The simulation models a Crazyflie 2.x nano-quadrotor (mass 36 g, ~28 mm arm length). Physics is integrated in PyTorch on GPU with Euler steps at $\Delta t = 0.01$ s, with 2 decimation sub-steps per policy step. Key elements:
+The simulation models a Crazyflie 2.x nano-quadrotor (mass 36 g, ~28 mm arm length). Physics is integrated in PyTorch on GPU with Euler steps at $$\Delta t = 0.01$$ s, with 2 decimation sub-steps per policy step. The environment runs 4,096 instances in parallel using a fully vectorized implementation built with [PufferLib](https://github.com/PufferAI/PufferLib), keeping all physics and reward computation on the GPU and eliminating CPU–GPU transfer overhead. This parallelism is a major contributor to training throughput, allowing us to collect over 500,000 transitions per PPO update. Key elements:
 
-- **Thrust model:** Each rotor produces thrust via a quadratic polynomial in RPM: $F_i = c_0 + c_1 \omega_i + c_2 \omega_i^2$ (coefficients fit from hardware data).
-- **Motor delay:** Rotor speed tracks a commanded value with separate first-order time constants for spin-up ($\tau_r \approx 83$ ms) and spin-down ($\tau_f \approx 284$ ms).
+- **Thrust model:** Each rotor produces thrust via a quadratic polynomial in RPM: $$F_i = c_0 + c_1 \omega_i + c_2 \omega_i^2$$ (coefficients fit from hardware data).
+- **Motor delay:** Rotor speed tracks a commanded value with separate first-order time constants for spin-up ($$\tau_r \approx 83$$ ms) and spin-down ($$\tau_f \approx 284$$ ms).
 - **Torques:** Roll/pitch torques from cross products of rotor thrust vectors with arm positions; yaw torque from signed reaction torque constants.
-- **Attitude integration:** Quaternion kinematics $\dot{q} = \tfrac{1}{2} q \otimes \omega_q$, normalized each step.
+- **Attitude integration:** Quaternion kinematics $$\dot{q} = \tfrac{1}{2} q \otimes \omega_q$$, normalized each step.
 
-### Observations (25-dimensional)
-
-| Component | Dim | Description |
-|---|---|---|
-| Body-frame velocity | 3 | $v$ rotated into body frame |
-| Angular velocity | 3 | $\omega$ in body frame (rad/s) |
-| Gravity direction | 3 | $[0,0,-1]^\top$ rotated into body frame |
-| Orientation error | 3 | Axis-angle error between current and desired yaw quaternion |
-| Scaled RPM | 4 | $\omega_i / \omega_\text{max}$ for each rotor |
-| Relative waypoints | 9 | Body-frame offset to next 3 gates (3D each) |
-
-### Actions (4-dimensional)
-
-Actions are continuous values in $[-1, 1]$, linearly mapped to RPM commands in $[0, 21679]$ for each of the four rotors.
 
 ### Reward Function
 
@@ -77,7 +63,7 @@ Episodes terminate when the drone crashes (z < 0.1 m or z > 5 m), drifts more th
 
 Training uses a 6-level curriculum managed by `CurriculumScheduler`. The level advances when the 100-episode rolling mean reward exceeds a threshold for 5 consecutive evaluations. Track difficulty and dynamics randomization increase together:
 
-| Level | Track types (distribution) | Dynamics $\delta$ |
+| Level | Track types (distribution) | Dynamics $$\delta$$ |
 |---|---|---|
 | 0 | Straight (100%) | 0% |
 | 1 | Straight flat/height (50/50%) | 2% |
@@ -86,31 +72,27 @@ Training uses a 6-level curriculum managed by `CurriculumScheduler`. The level a
 | 4 | Random walk 40%, circle mixes 45%, straight+height 15% | 8% |
 | 5 | Random walk mixes 60%, circle mixes 30%, straight+height 10% | 10% |
 
-At each episode reset, thrust coefficients, torque constants, rotor positions, and motor time constants are each independently perturbed by up to $\pm\delta$ of their nominal values.
+At each episode reset, thrust coefficients, torque constants, rotor positions, and motor time constants are each independently perturbed by up to $$\pm\delta$$ of their nominal values.
 
 ### Hyperparameters
 
-TODO: REPLACE WITH ACTUAL USED PARAMETERS
-
-
-
 | Hyperparameter | Value |
 |---|---|
-| Parallel environments | 64 |
+| Parallel environments | 4,096 |
 | Rollout steps per update | 128 |
-| Total timesteps | 50,000,000 |
+| Total timesteps | 500,000,000 |
 | Learning rate | 3e-4 (linearly annealed to 0) |
-| Discount $\gamma$ | 0.99 |
-| GAE $\lambda$ | 0.95 |
-| PPO clip $\varepsilon$ | 0.2 |
-| Entropy coefficient $c_e$ | 0.01 |
-| Value coefficient $c_v$ | 0.5 |
+| Discount $$\gamma$$ | 0.999 |
+| GAE $$\lambda$$ | 0.95 |
+| PPO clip $$\varepsilon$$ | 0.1 |
+| Entropy coefficient $$c_e$$ | 0.001 (linearly annealed to 0) |
+| Value coefficient $$c_v$$ | 0.5 |
 | Update epochs per batch | 4 |
-| Minibatches per epoch | 4 |
+| Minibatches per epoch | 32 |
 | Gradient norm clip | 0.5 |
-| Hidden layer size | 256 |
+| Hidden layer size | 128 |
 
-Batch size = 64 × 128 = 8,192 transitions per update; minibatch size = 2,048.
+Batch size = 4,096 × 128 = 524,288 transitions per update; minibatch size = 16,384.
 
 ## Evaluation
 
@@ -142,7 +124,7 @@ Qualitative results (screen captures / Rerun recordings) will be embedded here o
 
 ### Curriculum Validation
 
-We verify each curriculum level independently by checking that the policy achieving threshold reward on level $k$ visually succeeds on the corresponding track geometry before the level advances. This prevents the curriculum from advancing prematurely due to reward hacking.
+We verify each curriculum level independently by checking that the policy achieving threshold reward on level $$k$$ visually succeeds on the corresponding track geometry before the level advances. This prevents the curriculum from advancing prematurely due to reward hacking.
 
 ## Remaining Goals and Challenges
 
@@ -154,11 +136,12 @@ The environment currently terminates an episode as soon as the drone leaves a ±
 
 ### Goals for the Remainder of the Quarter
 
-1. **Complete a full training run** to 50M steps and produce learning curves for all reward components and the curriculum level schedule.
-2. **Gate passage evaluation:** Log the number of unique gates passed per episode as a clean task-success metric, separate from the dense reward signal.
-3. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to gate centers) against the trained RL policy on a fixed test track at each difficulty level.
-4. **Sim-to-real considerations:** Identify which physical parameters are most sensitive under dynamics randomization, and discuss whether the trained policy's robustness bounds are plausible for real hardware deployment.
-5. **Visualization and demo:** Record Rerun replay logs of the trained policy on held-out tracks at curriculum levels 0–5 and embed them or link them from the website.
+1. **Complete a full training run** to 500M steps and produce learning curves for all reward components and the curriculum level schedule.
+2. **Faster convergence:** Because we iterate over reward shaping and curriculum configurations frequently, reaching competitive performance earlier in training is a priority. We plan to investigate reward scaling, network initialization, and curriculum threshold tuning to reduce the number of environment steps needed to observe meaningful progress per run.
+3. **Gate passage evaluation:** Log the number of unique gates passed per episode as a clean task-success metric, separate from the dense reward signal.
+4. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to gate centers) against the trained RL policy on a fixed test track at each difficulty level.
+5. **Sim-to-real considerations:** Identify which physical parameters are most sensitive under dynamics randomization, and discuss whether the trained policy's robustness bounds are plausible for real hardware deployment.
+6. **Visualization and demo:** Record Rerun replay logs of the trained policy on held-out tracks at curriculum levels 0–5 and embed them or link them from the website.
 
 ## Resources Used
 
