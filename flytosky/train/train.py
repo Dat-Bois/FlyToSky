@@ -171,9 +171,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--progress-reward-scale", type=float, default=40.0)
     p.add_argument("--wp-passed-reward-scale", type=float, default=70.0)
     p.add_argument("--action-smoothness-reward-scale", type=float, default=-9.0)
+    p.add_argument("--action-magnitude-reward-scale", type=float, default=-0.5)
     p.add_argument("--ang-vel-reward-scale", type=float, default=-5.5)
     p.add_argument("--orientation-reward-scale", type=float, default=-20.0)
-    p.add_argument("--alive-reward-scale", type=float, default=-0.2)
+    p.add_argument("--alive-reward-scale", type=float, default=-0.5)
 
     # --- Curriculum ---
     p.add_argument("--curriculum-start-level", type=int, default=0,
@@ -182,7 +183,7 @@ def parse_args() -> argparse.Namespace:
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
-    p.add_argument("--max-curriculum-level", type=int, default=1, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
+    p.add_argument("--max-curriculum-level", type=int, default=0, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
                    help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---

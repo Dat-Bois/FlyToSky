@@ -33,6 +33,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         progress_reward_scale: float,
         wp_passed_reward_scale: float,
         action_smoothness_reward_scale: float,
+        action_magnitude_reward_scale: float,
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
         alive_reward_scale: float,
@@ -65,6 +66,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.progress_reward_scale = progress_reward_scale
         self.wp_passed_reward_scale = wp_passed_reward_scale
         self.action_smoothness_reward_scale = action_smoothness_reward_scale
+        self.action_magnitude_reward_scale = action_magnitude_reward_scale
         self.ang_vel_reward_scale = ang_vel_reward_scale
         self.orientation_reward_scale = orientation_reward_scale
         self.alive_reward_scale = alive_reward_scale
@@ -132,7 +134,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in ["progress", "wp_passed", "action_smoothness", "ang_vel", "orientation"]
+            for key in ["progress", "wp_passed", "action_smoothness", "action_magnitude", "ang_vel", "orientation", "alive"]
         }
         self._cumulative_rewards = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
@@ -194,8 +196,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # Accumulate rewards and reward components across decimation sub-steps.
         # Only the final sub-step's observations, terminals, etc. are kept.
         total_rewards = torch.zeros(self.num_envs, device=self.device)
-        total_unscaled_components = torch.zeros(self.num_envs, 5, device=self.device)
-        total_scaled_components = torch.zeros(self.num_envs, 5, device=self.device)
+        total_unscaled_components = torch.zeros(self.num_envs, 7, device=self.device)
+        total_scaled_components = torch.zeros(self.num_envs, 7, device=self.device)
 
         for _ in range(self._decimation_steps):
             self._physics_substep(actions_rpm)
@@ -207,7 +209,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self._last_actions_rpm = actions_rpm.clone()
 
         self.rewards = total_rewards
-        component_names = ["progress", "wp_passed", "action_smoothness", "ang_vel", "orientation"]
+        component_names = ["progress", "wp_passed", "action_smoothness", "action_magnitude", "ang_vel", "orientation", "alive"]
         # Unscaled rewards dict for episode tracking
         rewards_dict = {
             name: total_unscaled_components[:, i]
@@ -310,6 +312,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         progress_reward_scale: float,
         wp_passed_reward_scale: float,
         action_smoothness_reward_scale: float,
+        action_magnitude_reward_scale: float,
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
         alive_reward_scale: float,
@@ -456,6 +459,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         # action penalty (use normalized [-1,1] actions so penalty is RPM-independent)
         action_diff = torch.norm(actions_normalized - last_actions_normalized, dim=1)
         r_smooth = action_smoothness_reward_scale * action_diff * dt
+        action_mag = torch.square(actions_normalized).mean(dim=1)
+        r_magnitude = action_magnitude_reward_scale * action_mag * dt
         # velocity penalty (encourage smooth flight)
         wx = new_angular_velocity[:, 0] # Roll rate
         wy = new_angular_velocity[:, 1] # Pitch rate
@@ -470,13 +475,24 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         r_orient = orientation_error_mapped * orientation_reward_scale * dt
         r_alive = alive_reward_scale * dt # small reward just for being alive each step
 
+        # Check for termination / crash
+        dist_to_target = torch.linalg.norm(desired_pos_w - new_position, dim=1)
+        lost = dist_to_target > 8.0
+        track_completed = (target_wp_idx + wp_passed.long()) >= (wp_positions.shape[1])
+        spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
+        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out | false_pass
+        crashed = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | false_pass | spinning_out
+        r_crashed = crashed.float() * -20.0
+
         rewards = (
             r_progress +
             r_wp +
             r_smooth +
+            r_magnitude +
             r_ang_vel +
             r_orient +
-            r_alive
+            r_alive +
+            r_crashed
         )
 
         # Reward components for logging
@@ -485,24 +501,21 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             delta_progress,
             wp_passed.float(),
             action_diff * dt,
+            action_mag * dt,
             ang_vel * dt,
             orientation_error_mapped * dt,
+            torch.ones_like(r_alive) * dt,
         ], dim=-1)
         # Scaled (actual reward contributions)
         scaled_reward_components = torch.stack([
             r_progress,
             r_wp,
             r_smooth,
+            r_magnitude,
             r_ang_vel,
             r_orient,
+            r_alive,
         ], dim=-1)
-
-        # Check for termination
-        dist_to_target = torch.linalg.norm(desired_pos_w - new_position, dim=1)
-        lost = dist_to_target > 8.0
-        track_completed = (target_wp_idx + wp_passed.long()) >= (wp_positions.shape[1])
-        spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
-        died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out | false_pass
 
         return (
             new_rotor_speeds,
@@ -569,6 +582,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self.progress_reward_scale,
             self.wp_passed_reward_scale,
             self.action_smoothness_reward_scale,
+            self.action_magnitude_reward_scale,
             self.ang_vel_reward_scale,
             self.orientation_reward_scale,
             self.alive_reward_scale,
