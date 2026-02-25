@@ -5,7 +5,7 @@ title: Status
 
 ## Project Summary
 
-FlyToSky trains a quadrotor drone to autonomously fly through sequences of gate waypoints using deep reinforcement learning. Rather than relying on hand-tuned cascaded PID controllers, the agent learns a direct mapping from raw sensor observations — body-frame velocities, angular rates, rotor speeds, and relative waypoint positions — to continuous motor commands. The environment simulates realistic physics, including a quadratic thrust curve and first-order motor delay dynamics. Training uses Proximal Policy Optimization (PPO) with a curriculum that progressively increases track difficulty from straight-line gates to random 3D gates, while simultaneously ramping up dynamics randomization to encourage robustness.
+FlyToSky trains a quadrotor drone to autonomously fly through sequences of waypoints using deep reinforcement learning. Rather than relying on hand-tuned cascaded PID controllers, the agent learns a direct mapping from raw sensor observations — body-frame velocities, angular rates, rotor speeds, and relative waypoint positions — to continuous motor commands. The environment simulates realistic physics, including a quadratic thrust curve and first-order motor delay dynamics. Training uses Proximal Policy Optimization (PPO) with a curriculum that progressively increases track difficulty from straight-line waypoints to random 3D waypoints, while simultaneously ramping up dynamics randomization to encourage robustness.
 
 ## Approach
 
@@ -31,7 +31,7 @@ $$\hat{A}_t = \sum_{k=0}^{T-t-1} (\gamma\lambda)^k \delta_{t+k}, \qquad \delta_t
 
 ### Network Architecture
 
-Both actor and critic share a common encoder: two fully-connected layers of 256 hidden units each with Tanh activations, initialized with orthogonal weight matrices (gain $$\sqrt{2}$$). The actor head is a linear projection to 4 outputs (std 0.01 init) and the critic head is a linear projection to a scalar (std 1.0 init). The $$\log \sigma$$ vector is a free parameter initialized to zero.
+Both actor and critic share a common encoder: two fully-connected layers of 128 hidden units each with ReLu activations, initialized with orthogonal weight matrices (gain $$\sqrt{2}$$). The actor head is a linear projection to 4 outputs (std 0.01 init) and the critic head is a linear projection to a scalar (std 1.0 init). The $$\log \sigma$$ vector is a free parameter initialized to zero.
 
 ### Environment and Physics
 
@@ -47,17 +47,21 @@ The simulation models a Crazyflie 2.x nano-quadrotor (mass 36 g, ~28 mm arm leng
 
 The total reward per step is:
 
-$$r = r_\text{progress} + r_\text{gate} + r_\text{smooth} + r_\text{ang} + r_\text{orient}$$
+$$r = r_\text{progress} + r_\text{wp} + r_\text{smooth} + r_\text{mag} + r_\text{ang} + r_\text{orient} + r_\text{alive} + r_\text{crash}$$
 
 | Component | Formula | Scale |
 |---|---|---|
-| Progress | $$\Delta d = \|p_t - g\| - \|p_{t+1} - g\|$$ | $$\times 100$$ |
-| Gate passage | $$\mathbf{1}[\text{crossed gate within 1.5 m}]$$ | $$\times 5$$ |
-| Action smoothness | $$-\|\Delta u\| \cdot \Delta t$$ | $$\times -0.7$$ |
-| Angular velocity | $$-\|\omega\|^2 \cdot \Delta t$$ | $$\times -0.01$$ |
-| Orientation | $$(1 - \tanh(\|\text{err}\|/0.5)) \cdot \Delta t$$ | $$\times 100$$ |
+| Progress | $$\text{clamp}(\|p_t - g\| - \|p_{t+1} - g\|,\;{-0.5},\;0.2)$$ | $$\times 40$$ |
+| Waypoint passage | $$\mathbf{1}[\text{waypoint crossed}]$$ | $$\times 70$$ |
+| Action smoothness | $$-\|\Delta \hat{u}\| \cdot \Delta t$$ | $$\times -9.0$$ |
+| Action magnitude | $$-\overline{\hat{u}^2} \cdot \Delta t$$ | $$\times -0.5$$ |
+| Angular velocity (roll/pitch) | $$-\text{clamp}(\omega_x^2 + \omega_y^2,\;0,\;400) \cdot \Delta t$$ | $$\times -5.5$$ |
+| Angular velocity (yaw) | $$-\omega_z^2 \cdot \Delta t$$ | $$\times -0.2$$ |
+| Orientation | $$-\tanh(\|\text{err}\|/0.5) \cdot \Delta t$$ | $$\times -20$$ |
+| Alive | $$\Delta t$$ | $$\times -0.5$$ |
+| Crash | $$\mathbf{1}[\text{crash}]$$ | $$\times -20$$ |
 
-Episodes terminate when the drone crashes (z < 0.1 m or z > 5 m), drifts more than 8 m from the current target gate, or completes all waypoints on the track.
+Episodes terminate when the drone crashes (z < 0.1 m or z > 5 m), drifts more than 8 m from the current target waypoint, or completes all waypoints on the track.
 
 ### Curriculum and Track Generation
 
@@ -100,9 +104,9 @@ Batch size = 4,096 × 128 = 524,288 transitions per update; minibatch size = 16,
 
 Training is monitored via rolling episode reward and episode length (averaged over the last 100 completed episodes). The primary metrics are:
 
-- **Mean episode reward:** Measures overall policy quality integrating progress, gate passage, and penalty terms.
+- **Mean episode reward:** Measures overall policy quality integrating progress, waypoint passage, and penalty terms.
 - **Mean episode length:** A proxy for survival and stability. Longer episodes indicate the drone stays airborne and continues progressing.
-- **Gates passed per episode:** Directly quantifies navigation success on the track.
+- **Waypoints passed per episode:** Directly quantifies navigation success on the track.
 - **Curriculum level:** Tracks skill progression from easy to hard tracks.
 - **Explained variance:** Measures value function quality; values near 1.0 indicate accurate return prediction.
 
@@ -110,15 +114,15 @@ The following plots will be populated once the full training run completes (targ
 
 - Episode reward curve vs. training step
 - Curriculum level over time
-- Reward component breakdown (progress, gates passed, orientation, smoothness, angular velocity penalties)
+- Reward component breakdown (progress, waypoints passed, orientation, smoothness, angular velocity penalties)
 
 ### Qualitative Evaluation
 
-We use a custom real-time renderer (via `Log.render`) to visualize the first environment during training. This outputs per-step telemetry including position, orientation, rotor speeds, thrust vectors, and waypoint positions, which is visualized using **Rerun**. Key qualitative checks:
+We use a a logging tool called Rerun to visualize the first environment during training. This outputs per-step telemetry including position, orientation, rotor speeds, thrust vectors, and waypoint positions Key qualitative checks:
 
-- Does the drone point toward the next gate? (orientation component)
+- Does the drone point toward the next waypoint? (orientation component)
 - Does it slow action changes between steps? (smoothness component)
-- Does it recover from a poor spawn position and still reach the first gate?
+- Does it recover from a poor spawn position and still reach the first waypoint?
 
 Qualitative results (screen captures / Rerun recordings) will be embedded here once collected.
 
@@ -130,24 +134,27 @@ We verify each curriculum level independently by checking that the policy achiev
 
 ### Current Limitations
 
-The current prototype implements a complete end-to-end PPO pipeline with a realistic physics simulator, curriculum learning, and dynamics randomization — but has not yet been trained to convergence. The main outstanding item is completing a full 50M-step training run and collecting quantitative results at each curriculum level. Additionally, the track generator's levels 4 and 5 (random walk) are functional but have not yet been stress-tested to confirm they present a smooth difficulty increase from level 3.
+The current prototype implements a complete end-to-end PPO pipeline with a realistic physics simulator, curriculum learning, and dynamics randomization but has not yet been trained to convergence. The main outstanding item is completing a full 50M-step training run and collecting quantitative results at each curriculum level. Additionally, the track generator's levels 4 and 5 (random walk) are functional but have not yet been stress-tested to confirm they present a smooth difficulty increase from level 3.
 
-The environment currently terminates an episode as soon as the drone leaves a ±8 m radius of the current target gate, which can make early training sparse if the agent consistently overshoots. We plan to investigate whether a shaped "closest approach" fallback reward or a longer tolerated deviation radius improves sample efficiency at curriculum level 0.
+The environment currently terminates an episode as soon as the drone leaves a ±8 m radius of the current target waypoint, which can make early training sparse if the agent consistently overshoots. We plan to investigate whether a shaped "closest approach" fallback reward or a longer tolerated deviation radius improves sample efficiency at curriculum level 0.
 
 ### Goals for the Remainder of the Quarter
 
 1. **Complete a full training run** to 500M steps and produce learning curves for all reward components and the curriculum level schedule.
 2. **Faster convergence:** Because we iterate over reward shaping and curriculum configurations frequently, reaching competitive performance earlier in training is a priority. We plan to investigate reward scaling, network initialization, and curriculum threshold tuning to reduce the number of environment steps needed to observe meaningful progress per run.
-3. **Gate passage evaluation:** Log the number of unique gates passed per episode as a clean task-success metric, separate from the dense reward signal.
-4. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to gate centers) against the trained RL policy on a fixed test track at each difficulty level.
+3. **Waypoint passage evaluation:** Log the number of unique waypoints passed per episode as a clean task-success metric, separate from the dense reward signal.
+4. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to waypoint centers) against the trained RL policy on a fixed test track at each difficulty level.
 5. **Sim-to-real considerations:** Identify which physical parameters are most sensitive under dynamics randomization, and discuss whether the trained policy's robustness bounds are plausible for real hardware deployment.
 6. **Visualization and demo:** Record Rerun replay logs of the trained policy on held-out tracks at curriculum levels 0–5 and embed them or link them from the website.
 
 ## Resources Used
 
 - Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). *Proximal Policy Optimization Algorithms.* arXiv:1707.06347.
+- Jonas Eschmann, Dario Albani, Giuseppe Loianno, *Learning to Fly in Seconds* https://arxiv.org/abs/2311.13081
+- Robin Ferede, Till Blaha, Erin Lucassen, Christophe De Wagter, Guido C.H.E. de Croon, *One Net to Rule Them All: Domain Randomization in Quadcopter Racing Across Different Platforms* 
+https:/arxiv.org/pdf/2504.21586
+- Aderik Verraest, Stavrow Bahnam, Robin Ferede, Guido de Croon, Christophe De Wagter, *SkyDreamer: Interpretable End-to-End Vision-Based Drone Racing with Model-Based Reinforcement Learning* https://arxiv.org/pdf/2510.14783
 - Huang, S., Dossa, R. F. J., Ye, C., Braga, J., et al. (2022). *CleanRL: High-quality Single-file Implementations of Deep Reinforcement Learning Algorithms.* JMLR 23(274). [https://github.com/vwxyzjn/cleanrl](https://github.com/vwxyzjn/cleanrl)
-- Schulman, J., Moritz, P., Levine, S., Jordan, M., & Abbeel, P. (2016). *High-Dimensional Continuous Control Using Generalized Advantage Estimation.* ICLR 2016.
 - Bitcraze AB. *Crazyflie 2.x hardware specifications.* [https://www.bitcraze.io](https://www.bitcraze.io)
 - PufferLib: [https://github.com/PufferAI/PufferLib](https://github.com/PufferAI/PufferLib)
 - Rerun visualization SDK: [https://rerun.io](https://rerun.io)
