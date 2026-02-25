@@ -51,11 +51,11 @@ $$r = r_\text{progress} + r_\text{gate} + r_\text{smooth} + r_\text{ang} + r_\te
 
 | Component | Formula | Scale |
 |---|---|---|
-| Progress | $\Delta d = \|p_t - g\| - \|p_{t+1} - g\|$ | $\times 100$ |
-| Gate passage | $\mathbf{1}[\text{crossed gate within 1.5 m}]$ | $\times 5$ |
-| Action smoothness | $-\|\Delta u\| \cdot \Delta t$ | $\times -0.7$ |
-| Angular velocity | $-\|\omega\|^2 \cdot \Delta t$ | $\times -0.01$ |
-| Orientation | $(1 - \tanh(\|\text{err}\|/0.5)) \cdot \Delta t$ | $\times 100$ |
+| Progress | $$\Delta d = \|p_t - g\| - \|p_{t+1} - g\|$$ | $$\times 100$$ |
+| Gate passage | $$\mathbf{1}[\text{crossed gate within 1.5 m}]$$ | $$\times 5$$ |
+| Action smoothness | $$-\|\Delta u\| \cdot \Delta t$$ | $$\times -0.7$$ |
+| Angular velocity | $$-\|\omega\|^2 \cdot \Delta t$$ | $$\times -0.01$$ |
+| Orientation | $$(1 - \tanh(\|\text{err}\|/0.5)) \cdot \Delta t$$ | $$\times 100$$ |
 
 Episodes terminate when the drone crashes (z < 0.1 m or z > 5 m), drifts more than 8 m from the current target gate, or completes all waypoints on the track.
 
