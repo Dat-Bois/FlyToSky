@@ -363,7 +363,7 @@ code {
 }
 
 .logging-preview img {
-  width: 40%;
+  width: 80%;
   border-radius: 6px;
   border: 1px solid var(--panel-edge);
 }
