@@ -19,6 +19,13 @@ title:  Home
 </div>
 
 <hr class="section-rule">
+<div class="section-label">Logging</div>
+
+<div class="logging-preview">
+  <img src="images/logging_example.png" alt="Training logging example">
+</div>
+
+<hr class="section-rule">
 <div class="section-label">Reports</div>
 
 <div class="reports-bar">

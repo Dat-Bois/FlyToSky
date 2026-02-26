@@ -321,6 +321,52 @@ code {
   margin-bottom: 20px;
 }
 
+/* ---- Video embed ---- */
+.video-embed {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  margin-bottom: 40px;
+}
+
+.video-embed iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+}
+
+/* ---- Eval figures ---- */
+.eval-figure {
+  margin: 28px 0;
+}
+
+.eval-figure img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+}
+
+.eval-figure figcaption {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* ---- Logging preview ---- */
+.logging-preview {
+  margin-bottom: 40px;
+}
+
+.logging-preview img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+}
+
 /* ---- Team grid ---- */
 .team-grid {
   display: grid;

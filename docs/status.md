@@ -3,6 +3,10 @@ layout: default
 title: Status
 ---
 
+<div class="video-embed">
+  <iframe src="https://www.youtube.com/embed/hv4wH8m8HZY" frameborder="0" allowfullscreen></iframe>
+</div>
+
 ## Project Summary
 
 FlyToSky trains a quadrotor drone to autonomously fly through sequences of waypoints using deep reinforcement learning. Rather than relying on hand-tuned cascaded PID controllers, the agent learns a direct mapping from raw sensor observations — body-frame velocities, angular rates, rotor speeds, and relative waypoint positions — to continuous motor commands. The environment simulates realistic physics, including a quadratic thrust curve and first-order motor delay dynamics. Training uses Proximal Policy Optimization (PPO) with a curriculum that progressively increases track difficulty from straight-line waypoints to random 3D waypoints, while simultaneously ramping up dynamics randomization to encourage robustness.
@@ -110,11 +114,20 @@ Training is monitored via rolling episode reward and episode length (averaged ov
 - **Curriculum level:** Tracks skill progression from easy to hard tracks.
 - **Explained variance:** Measures value function quality; values near 1.0 indicate accurate return prediction.
 
-The following plots will be populated once the full training run completes (target: 50M environment steps):
+<figure class="eval-figure">
+  <img src="images/reward_mean.png" alt="Mean episode reward over training">
+  <figcaption>The progression of how our network improves its rewards over time. </figcaption>
+</figure>
 
-- Episode reward curve vs. training step
-- Curriculum level over time
-- Reward component breakdown (progress, waypoints passed, orientation, smoothness, angular velocity penalties)
+<figure class="eval-figure">
+  <img src="images/rewardss_split.png" alt="Reward component breakdown">
+  <figcaption>Here is the breakdown of rewards. Adding new reward values and reward shaping has been the largest challenge.</figcaption>
+</figure>
+
+<figure class="eval-figure">
+  <img src="images/scaled_mean_waypoints.png" alt="Scaled mean waypoints passed per episode">
+  <figcaption>Here is the performance of the agent measured in the average number of waypoints it passes through. The dip in the pink line is when the curriculum changed (different type of track). The waypoints passed is plateauing around 250m steps. </figcaption>
+</figure>
 
 ### Qualitative Evaluation
 
@@ -124,7 +137,15 @@ We use a a logging tool called Rerun to visualize the first environment during t
 - Does it slow action changes between steps? (smoothness component)
 - Does it recover from a poor spawn position and still reach the first waypoint?
 
-Qualitative results (screen captures / Rerun recordings) will be embedded here once collected.
+<figure class="eval-figure">
+  <img src="images/bang_motor_control.png" alt="Motor control visualization">
+  <figcaption>An issue we have encountered is the drone's behavior converging to thrust its motors only at extreme speeds. ("bang-bang controls"). This leads to an unstable flight instead of a smooth control. We will try to improve this by adjusting rewards.</figcaption>
+</figure>
+
+<figure class="eval-figure">
+  <img src="images/waypoint_one_observation_being_high.png" alt="Waypoint observation at high altitude">
+  <figcaption>Another potential challenge we have encountered is scaling the different inputs. For example, the distance of the first waypoint of (wp1_rel_x) was disproportionate to the other observations and likely messed up the weights associated with that feature.</figcaption>
+</figure>
 
 ### Curriculum Validation
 
@@ -134,18 +155,15 @@ We verify each curriculum level independently by checking that the policy achiev
 
 ### Current Limitations
 
-The current prototype implements a complete end-to-end PPO pipeline with a realistic physics simulator, curriculum learning, and dynamics randomization but has not yet been trained to convergence. The main outstanding item is completing a full 50M-step training run and collecting quantitative results at each curriculum level. Additionally, the track generator's levels 4 and 5 (random walk) are functional but have not yet been stress-tested to confirm they present a smooth difficulty increase from level 3.
-
-The environment currently terminates an episode as soon as the drone leaves a ±8 m radius of the current target waypoint, which can make early training sparse if the agent consistently overshoots. We plan to investigate whether a shaped "closest approach" fallback reward or a longer tolerated deviation radius improves sample efficiency at curriculum level 0.
+The current prototype implements a complete end-to-end PPO pipeline with a realistic physics simulator, curriculum learning, and dynamics randomization but has not yet been trained to a good convergence (plateaus early).
 
 ### Goals for the Remainder of the Quarter
 
-1. **Complete a full training run** to 500M steps and produce learning curves for all reward components and the curriculum level schedule.
+1. **Optimal reward shaping:** Our goal is to tune the reward scaling to make the agent converge quicker and to accurately handle more difficult curriculums.
 2. **Faster convergence:** Because we iterate over reward shaping and curriculum configurations frequently, reaching competitive performance earlier in training is a priority. We plan to investigate reward scaling, network initialization, and curriculum threshold tuning to reduce the number of environment steps needed to observe meaningful progress per run.
-3. **Waypoint passage evaluation:** Log the number of unique waypoints passed per episode as a clean task-success metric, separate from the dense reward signal.
-4. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to waypoint centers) against the trained RL policy on a fixed test track at each difficulty level.
-5. **Sim-to-real considerations:** Identify which physical parameters are most sensitive under dynamics randomization, and discuss whether the trained policy's robustness bounds are plausible for real hardware deployment.
-6. **Visualization and demo:** Record Rerun replay logs of the trained policy on held-out tracks at curriculum levels 0–5 and embed them or link them from the website.
+3. **Baseline comparison:** Implement or import a simple PID hover-and-navigate controller and compare tracking error (RMSE to waypoint centers) against the trained RL policy on a fixed test track at each difficulty level.
+4. **Sim-to-real considerations:** Identify which physical parameters are most sensitive under dynamics randomization, and discuss whether the trained policy's robustness bounds are plausible for real hardware deployment.
+5. **Visualization and demo:** Record Rerun replay logs of the trained policy on held-out tracks at curriculum levels 0–5 and embed them or link them from the website.
 
 ## Resources Used
 
