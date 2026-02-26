@@ -359,10 +359,11 @@ code {
 /* ---- Logging preview ---- */
 .logging-preview {
   margin-bottom: 40px;
+  text-align: center;
 }
 
 .logging-preview img {
-  width: 60%;
+  width: 40%;
   border-radius: 6px;
   border: 1px solid var(--panel-edge);
 }
