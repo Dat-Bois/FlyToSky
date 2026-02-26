@@ -344,7 +344,7 @@ code {
 }
 
 .eval-figure img {
-  width: 100%;
+  width: 60%;
   border-radius: 6px;
   border: 1px solid var(--panel-edge);
 }
@@ -362,7 +362,7 @@ code {
 }
 
 .logging-preview img {
-  width: 100%;
+  width: 60%;
   border-radius: 6px;
   border: 1px solid var(--panel-edge);
 }
