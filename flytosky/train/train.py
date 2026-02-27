@@ -168,13 +168,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dt", type=float, default=0.01)
 
     # --- Rewards ----
-    p.add_argument("--progress-reward-scale", type=float, default=40.0)
-    p.add_argument("--wp-passed-reward-scale", type=float, default=70.0)
-    p.add_argument("--action-smoothness-reward-scale", type=float, default=-9.0)
-    p.add_argument("--action-magnitude-reward-scale", type=float, default=-0.5)
-    p.add_argument("--ang-vel-reward-scale", type=float, default=-5.5)
-    p.add_argument("--orientation-reward-scale", type=float, default=-20.0)
+    p.add_argument("--progress-reward-scale", type=float, default=1.0)
+    p.add_argument("--wp-passed-reward-scale", type=float, default=10.0)
+    p.add_argument("--action-smoothness-reward-scale", type=float, default=-0.1)
+    p.add_argument("--action-magnitude-reward-scale", type=float, default=-0.1)
+    p.add_argument("--ang-vel-reward-scale", type=float, default=-0.1)
+    p.add_argument("--orientation-reward-scale", type=float, default=-0.5)
     p.add_argument("--alive-reward-scale", type=float, default=-0.5)
+    p.add_argument("--crash-penalty", type=float, default=-10.0)
 
     # --- Curriculum ---
     p.add_argument("--curriculum-start-level", type=int, default=0,
@@ -192,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint-freq", type=int, default=100)
     p.add_argument("--checkpoint-dir", type=str, default=f'checkpoints/{time.strftime("%Y-%m-%d_%H-%M-%S")}')
     p.add_argument("--resume", type=str, default="")
-    p.add_argument("--config-path", type=str, default="")
+    p.add_argument("--config-path", type=str, default="micro.json")
     p.add_argument("--tensorboard-dir", type=str,
                    default=f'runs/{time.strftime("%Y-%m-%d_%H-%M-%S")}',
                    help="TensorBoard log directory")
@@ -217,11 +218,8 @@ def main() -> None:
     np.random.seed(args.seed)
 
     # Resolve config path
-    if args.config_path:
-        config_path = args.config_path
-    else:
-        env_dir = Path(__file__).resolve().parent.parent / "environment"
-        config_path = str(env_dir / "quad_params.json")
+    env_dir = Path(__file__).resolve().parent.parent / "environment"
+    config_path = str(env_dir / "quads" / args.config_path)
     Log.info(f"Config path: {config_path}")
 
     # Curriculum scheduler
@@ -240,9 +238,11 @@ def main() -> None:
         progress_reward_scale=args.progress_reward_scale,
         wp_passed_reward_scale=args.wp_passed_reward_scale,
         action_smoothness_reward_scale=args.action_smoothness_reward_scale,
+        action_magnitude_reward_scale=args.action_magnitude_reward_scale,
         ang_vel_reward_scale=args.ang_vel_reward_scale,
         orientation_reward_scale=args.orientation_reward_scale,
         alive_reward_scale=args.alive_reward_scale,
+        crash_penalty=args.crash_penalty,
         num_track_points=args.num_track_points,
         dynamics_randomization_delta=curriculum.dynamics_delta,
         device=str(device),
@@ -465,9 +465,9 @@ def main() -> None:
             Log.log_episode_reward_mean(rolling_mean_reward)
         # Log reward components when available
         component_keys = ["mean_progress", "mean_wp_passed", "mean_action_smoothness",
-                          "mean_ang_vel", "mean_orientation"]
+                          "mean_action_magnitude","mean_ang_vel", "mean_orientation", "mean_alive"]
         scaled_component_keys = ["mean_scaled_progress", "mean_scaled_wp_passed", "mean_scaled_action_smoothness",
-                                 "mean_scaled_ang_vel", "mean_scaled_orientation"]
+                                 "mean_scaled_action_magnitude", "mean_scaled_ang_vel", "mean_scaled_orientation", "mean_scaled_alive"]
         # ---- TensorBoard ----
         writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("charts/SPS", sps, global_step)

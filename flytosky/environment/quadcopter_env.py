@@ -37,6 +37,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
         alive_reward_scale: float,
+        crash_penalty: float,
         dynamics_randomization_delta: float = 0.0,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_compile: bool = False,
@@ -70,6 +71,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         self.ang_vel_reward_scale = ang_vel_reward_scale
         self.orientation_reward_scale = orientation_reward_scale
         self.alive_reward_scale = alive_reward_scale
+        self.crash_penalty = crash_penalty
         
         # dynamics randomization range (percentage)
         self.dynamics_randomization_delta = dynamics_randomization_delta
@@ -316,6 +318,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         ang_vel_reward_scale: float,
         orientation_reward_scale: float,
         alive_reward_scale: float,
+        crash_penalty: float,
     ):
         """Pure computation kernel for physics step - compiled by torch.compile."""
         # Apply motor delay
@@ -422,7 +425,8 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - new_position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, new_quaternion)
-            future_rel_wp.append(rel_pos_body * (0.35**(i+1)))  # scale down for stability
+            rel_pos_body = torch.clamp(rel_pos_body * (0.3**(i+1)), -1.0, 1.0)
+            future_rel_wp.append(rel_pos_body)
 
         # create copy of new angular velocity and orientation error to scale down
         o_new_angular_velocity = new_angular_velocity.clone()
@@ -468,12 +472,12 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         xy_spin_penalty = torch.clamp(torch.square(wx) + torch.square(wy), max=400.0)
         z_spin_penalty = torch.square(wz)
         ang_vel = xy_spin_penalty + z_spin_penalty
-        r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.2 * dt)
+        r_ang_vel = (xy_spin_penalty * ang_vel_reward_scale * dt) + (z_spin_penalty * -0.05 * dt)
         # orientation penalty (encourage facing towards goal)
         orientation_error_magnitude = torch.linalg.norm(orientation_error, dim=1)
         orientation_error_mapped = torch.tanh(orientation_error_magnitude / 0.5)
         r_orient = orientation_error_mapped * orientation_reward_scale * dt
-        r_alive = alive_reward_scale * dt # small reward just for being alive each step
+        r_alive = alive_reward_scale * dt # small penalty just for being alive each step
 
         # Check for termination / crash
         dist_to_target = torch.linalg.norm(desired_pos_w - new_position, dim=1)
@@ -482,7 +486,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
         died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out | false_pass
         crashed = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | false_pass | spinning_out
-        r_crashed = crashed.float() * -20.0
+        r_crashed = crashed.float() * -10.0
 
         rewards = (
             r_progress +
@@ -504,7 +508,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             action_mag * dt,
             ang_vel * dt,
             orientation_error_mapped * dt,
-            torch.ones_like(r_alive) * dt,
+            torch.ones_like(delta_progress) * dt, # represents alive reward, dp is just for shape reference
         ], dim=-1)
         # Scaled (actual reward contributions)
         scaled_reward_components = torch.stack([
@@ -514,7 +518,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             r_magnitude,
             r_ang_vel,
             r_orient,
-            r_alive,
+            torch.ones_like(r_progress) * r_alive,
         ], dim=-1)
 
         return (
@@ -586,6 +590,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             self.ang_vel_reward_scale,
             self.orientation_reward_scale,
             self.alive_reward_scale,
+            self.crash_penalty,
         )
 
     def _get_observations(self) -> torch.Tensor:
@@ -607,7 +612,9 @@ class QuadcopterEnv(pufferlib.PufferEnv):
             wp_pos = self._wp_positions[batch_idx, idx]
             rel_pos_world = wp_pos - self._position
             rel_pos_body = rotate_vector_by_quaternion_conj(rel_pos_world, self._quaternion)
-            future_rel_wp.append(rel_pos_body * (0.35**(i+1)))
+            # clamp and scale down future waypoints to keep observations stable
+            rel_pos_body = torch.clamp(rel_pos_body * (0.3**(i+1)), -1.0, 1.0)
+            future_rel_wp.append(rel_pos_body)
 
         # create copy of new angular velocity and orientation error to scale down
         o_new_angular_velocity = self._angular_velocity.clone()
