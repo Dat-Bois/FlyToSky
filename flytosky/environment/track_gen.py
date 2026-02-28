@@ -51,8 +51,8 @@ class VectorizedTrackGenerator:
                 ("straight", False, 1.0),
             ],
             1: [
-                ("straight", False, 0.50),
-                ("straight", True,  0.50),
+                ("straight", False, 0.25),
+                ("straight", True,  0.75),
             ],
             2: [
                 ("circle",   False, 0.50),

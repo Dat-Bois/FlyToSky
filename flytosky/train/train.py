@@ -84,9 +84,9 @@ class CurriculumScheduler:
 
     # Default reward thresholds per level #TODO adjust
     DEFAULT_THRESHOLDS: dict[int, float] = {
-        0: 400.0,    # straight lines mastered
-        1: 500.0,    # straight + variable height
-        2: 10.0,   # circles
+        0: 40.0,    # straight lines mastered
+        1: 41.0,    # straight + variable height
+        2: 43.0,   # circles
         3: 12.0,   # circles + variable height
         4: 14.0,   # random walk mixes
         # level 5 is terminal — no further promotion
@@ -184,7 +184,7 @@ def parse_args() -> argparse.Namespace:
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
-    p.add_argument("--max-curriculum-level", type=int, default=0, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
+    p.add_argument("--max-curriculum-level", type=int, default=2, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
                    help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---
@@ -193,6 +193,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint-freq", type=int, default=100)
     p.add_argument("--checkpoint-dir", type=str, default=f'checkpoints/{time.strftime("%Y-%m-%d_%H-%M-%S")}')
     p.add_argument("--resume", type=str, default="")
+    p.add_argument("--pretrained", type=str, default="",
+                   help="Path to a .pt checkpoint to load model weights from "
+                        "(transfer learning: fresh optimizer, step count, and curriculum)")
     p.add_argument("--config-path", type=str, default="micro.json")
     p.add_argument("--tensorboard-dir", type=str,
                    default=f'runs/{time.strftime("%Y-%m-%d_%H-%M-%S")}',
@@ -290,6 +293,13 @@ def main() -> None:
         Log.info(
             f"Resumed from {args.resume}  (global_step={global_step}, "
             f"update={start_update - 1}, curriculum={curriculum.level})"
+        )
+    elif args.pretrained:
+        ckpt = torch.load(args.pretrained, map_location=device, weights_only=False)
+        agent.load_state_dict(ckpt["model"])
+        Log.info(
+            f"Loaded pretrained weights from {args.pretrained}  "
+            f"(fresh optimizer, global_step=0, curriculum={curriculum.level})"
         )
 
     # Checkpoint directory

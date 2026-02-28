@@ -674,7 +674,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         num_reset = len(env_ids)
 
         if delta > 0:
-            Log.debug(f"Applying dynamics randomization (delta={delta:.3f}) to {num_reset} envs")
+            # Log.debug(f"Applying dynamics randomization (delta={delta:.3f}) to {num_reset} envs")
             # Generate random multipliers: (1 +- delta)
             self._thrust_coefficients[env_ids] = self._nominal_thrust_coefficients * (
                 1.0 + torch.zeros((num_reset, *self._nominal_thrust_coefficients.shape), device=self.device).uniform_(-delta, delta)
