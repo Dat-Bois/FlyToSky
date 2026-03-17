@@ -436,10 +436,16 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         o_orientation_error[:, :2] *= 0.3
         o_orientation_error[:, 2] *= 0.5
 
+        # apply clamps
+        o_velocity_body = torch.clamp(velocity_body * 0.07, -1.0, 1.0)
+        o_gravity_body = torch.clamp(gravity_body, -1.0, 1.0)
+        o_new_angular_velocity = torch.clamp(o_new_angular_velocity, -1.0, 1.0)
+        o_orientation_error = torch.clamp(o_orientation_error, -1.0, 1.0)
+
         observations = torch.cat([
-            velocity_body * 0.07,           # 3
+            o_velocity_body,           # 3
             o_new_angular_velocity,    # 3
-            gravity_body,            # 3
+            o_gravity_body,            # 3
             o_orientation_error,       # 3
             rpm_scaled,              # 4
             *future_rel_wp           # 3 * lookahead(3) = 9
@@ -623,11 +629,17 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         o_orientation_error = orientation_error.clone()
         o_orientation_error[:, :2] *= 0.3
         o_orientation_error[:, 2] *= 0.5
+
+        # apply clamps
+        o_velocity_body = torch.clamp(velocity_body * 0.07, -1.0, 1.0)
+        o_gravity_body = torch.clamp(gravity_body, -1.0, 1.0)
+        o_new_angular_velocity = torch.clamp(o_new_angular_velocity, -1.0, 1.0)
+        o_orientation_error = torch.clamp(o_orientation_error, -1.0, 1.0)
         
         obs = torch.cat([
-            velocity_body * 0.07,           # 3
+            o_velocity_body,           # 3
             o_new_angular_velocity,  # 3
-            gravity_body,            # 3
+            o_gravity_body,            # 3
             o_orientation_error,       # 3
             rpm_scaled,               # 4
             *future_rel_wp             # 3 * lookahead

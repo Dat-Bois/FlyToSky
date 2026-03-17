@@ -46,11 +46,11 @@ class ActorCritic(nn.Module):
         super().__init__()
         self.encoder = nn.Sequential(
             layer_init(nn.Linear(obs_dim, hidden)),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             layer_init(nn.Linear(hidden, hidden)),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             layer_init(nn.Linear(hidden, hidden)),
-            nn.ReLU(),
+            nn.LeakyReLU(),
         )
         self.actor_mean = layer_init(nn.Linear(hidden, act_dim), std=0.01)
         self.critic = layer_init(nn.Linear(hidden, 1), std=1.0)
@@ -85,10 +85,10 @@ class CurriculumScheduler:
     # Default reward thresholds per level #TODO adjust
     DEFAULT_THRESHOLDS: dict[int, float] = {
         0: 40.0,    # straight lines mastered
-        1: 41.0,    # straight + variable height
-        2: 43.0,   # circles
-        3: 12.0,   # circles + variable height
-        4: 14.0,   # random walk mixes
+        1: 40.0,    # straight + variable height
+        2: 40.0,   # circles
+        3: 50.0,   # circles + variable height
+        4: 40.0,   # random walk mixes
         # level 5 is terminal — no further promotion
     }
 
@@ -169,22 +169,22 @@ def parse_args() -> argparse.Namespace:
 
     # --- Rewards ----
     p.add_argument("--progress-reward-scale", type=float, default=1.0)
-    p.add_argument("--wp-passed-reward-scale", type=float, default=10.0)
+    p.add_argument("--wp-passed-reward-scale", type=float, default=12.0)
     p.add_argument("--action-smoothness-reward-scale", type=float, default=-0.1)
-    p.add_argument("--action-magnitude-reward-scale", type=float, default=-0.1)
+    p.add_argument("--action-magnitude-reward-scale", type=float, default=-0.2)
     p.add_argument("--ang-vel-reward-scale", type=float, default=-0.1)
     p.add_argument("--orientation-reward-scale", type=float, default=-0.5)
     p.add_argument("--alive-reward-scale", type=float, default=-0.5)
     p.add_argument("--crash-penalty", type=float, default=-10.0)
 
     # --- Curriculum ---
-    p.add_argument("--curriculum-start-level", type=int, default=0,
+    p.add_argument("--curriculum-start-level", type=int, default=2,
                    help="Initial curriculum level (0-5)")
-    p.add_argument("--curriculum-patience", type=int, default=5,
+    p.add_argument("--curriculum-patience", type=int, default=10,
                    help="Consecutive above-threshold evals to advance")
     p.add_argument("--max-dynamics-delta", type=float, default=0.1,
                    help="Max dynamics randomisation delta (at highest level)")
-    p.add_argument("--max-curriculum-level", type=int, default=2, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
+    p.add_argument("--max-curriculum-level", type=int, default=3, #TODO: set to MAX_CURRICULUM_LEVEL when thresholds are tuned
                    help=f"Stop training once this curriculum level is reached (0-{MAX_CURRICULUM_LEVEL})")
 
     # --- Infra ---
