@@ -492,7 +492,7 @@ class QuadcopterEnv(pufferlib.PufferEnv):
         spinning_out = torch.linalg.norm(new_angular_velocity, dim=1) > 50.0 # 50 rad/s is an extreme spin, likely unrecoverable
         died = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | track_completed | spinning_out | false_pass
         crashed = (new_position[:, 2] < 0.1) | (new_position[:, 2] > 5.0) | lost | false_pass | spinning_out
-        r_crashed = crashed.float() * -10.0
+        r_crashed = crashed.float() * crash_penalty
 
         rewards = (
             r_progress +
