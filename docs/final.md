@@ -134,8 +134,13 @@ Training is monitored via rolling episode reward and episode length (averaged ov
 </figure>
 
 <figure class="eval-figure">
-  <img src="images/rewardss_split.png" alt="Reward component breakdown">
-  <figcaption>Breakdown of individual reward components over training. Adding new reward values and reward shaping was the largest challenge of the project. This view reveals which components dominate and helped us identify when penalties like action smoothness were overwhelming the progress signal.</figcaption>
+  <img src="images/best_run_individual_rewards.png" alt="Scaled individual reward components over training">
+  <figcaption>Scaled individual reward components over training for our best run. This view reveals which components dominate and helped us identify when penalties like action smoothness were overwhelming the progress signal.</figcaption>
+</figure>
+
+<figure class="eval-figure">
+  <img src="images/unscaled_reward_components.png" alt="Unscaled reward components over training">
+  <figcaption>Unscaled reward components over training. Viewing raw values made it easier to diagnose reward shaping issues — particularly when a penalty term was growing disproportionately large relative to the progress signal.</figcaption>
 </figure>
 
 <figure class="eval-figure">
@@ -167,8 +172,8 @@ We verify each curriculum level independently by checking that the policy achiev
 Several failure modes were identified and informed further development:
 
 1. **Bang-bang motor control:** The policy learned to saturate motors rather than use smooth intermediate throttle. Increasing the smoothness penalty $$\times(-9.0)$$ reduced this but did not fully resolve it.
-2. **Observation scale imbalance:** The first waypoint's relative position could be large at episode start, dominating the observation and producing poor initial gradient signals. Normalizing this input improved early-training stability.
-3. **Curriculum plateau:** The agent reliably passes levels 0–2 but plateaus at higher curriculum levels. This suggests the reward scaling or curriculum threshold may need further tuning to bridge the difficulty gap between straight and complex 3D tracks.
+2. **High motor throttle:** The drone converges to use motors at highest speed which causes it to lose control. This is a difficult behavior to get the drone to avoid.
+
 
 ## Resources Used
 
