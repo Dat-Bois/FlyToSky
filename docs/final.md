@@ -3,9 +3,7 @@ layout: default
 title: Final Report
 ---
 
-<div class="video-embed">
-  <iframe src="https://youtu.be/ok4VkzBzivo" frameborder="0" allowfullscreen></iframe>
-</div>
+<iframe width="1758" height="989" src="https://www.youtube.com/embed/ok4VkzBzivo" title="CS175 Final Report" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 
 ## Project Summary
 
