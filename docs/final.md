@@ -140,7 +140,7 @@ Training is monitored via rolling episode reward and episode length (averaged ov
 
 <figure class="eval-figure">
   <img src="images/unscaled_reward_components.png" alt="Unscaled reward components over training">
-  <figcaption>Unscaled reward components over training. Viewing raw values made it easier to diagnose reward shaping issues — particularly when a penalty term was growing disproportionately large relative to the progress signal.</figcaption>
+  <figcaption>Unscaled reward components over training. Viewing raw values made it easier to diagnose reward shaping issues.</figcaption>
 </figure>
 
 <figure class="eval-figure">
